@@ -1514,14 +1514,24 @@ function duelsHTML(ch, users) {
         <span class="muted small">${fmtPts(c.reply.score)} contre ${fmtPts(c.score)}</span></span></div>`);
     }
   }
+  // Défis lancés : repliés derrière une ligne de résumé, qu'on déplie d'un appui.
+  const sent = [];
   for (const c of ch.sent) {
     const u = users[c.toId];
     const res = !c.done ? `<span class="muted small">En attente… ton score : ${fmtPts(c.score)}</span>`
       : c.reply.score === c.score ? `<span class="muted small">🤝 Égalité : ${fmtPts(c.score)} chacun</span>`
       : c.reply.score > c.score ? `<span class="muted small">😱 Ton score est battu : ${fmtPts(c.reply.score)} contre ${fmtPts(c.score)}</span>`
       : `<span class="muted small">😎 Pas mieux que toi : ${fmtPts(c.reply.score)} contre ${fmtPts(c.score)}</span>`;
-    rows.push(`<div class="duel sent">${u ? avatar(u, 'sm') : ''}
+    sent.push(`<div class="duel sent">${u ? avatar(u, 'sm') : ''}
       <span class="min0 grow">Tu as défié <b>${name(c.toId)}</b> sur <b>${esc(c.title.name)}</b>${res}</span></div>`);
+  }
+  if (sent.length) {
+    const open = !!ui.expanded.duelsSent, waiting = ch.sent.filter(c => !c.done).length;
+    rows.push(`<button type="button" class="duel duels-toggle ${open ? 'is-open' : ''}" data-act="expand" data-key="duelsSent" aria-expanded="${open}">
+      <span class="game-emoji small">⚔️</span>
+      <span class="min0 grow"><b>${sent.length > 1 ? `${sent.length} défis lancés` : '1 défi lancé'}</b>
+        <span class="muted small">${[waiting && `${waiting} en attente`, sent.length - waiting && `${sent.length - waiting} relevé${sent.length - waiting > 1 ? 's' : ''}`].filter(Boolean).join(' · ')}</span></span>${ICON.chevron}</button>`);
+    if (open) rows.push(`<div class="duels-sent">${sent.join('')}</div>`);
   }
   return `<h2>⚔️ Défis</h2><div class="duels">${rows.join('')}</div>`;
 }

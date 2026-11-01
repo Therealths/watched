@@ -988,3 +988,10 @@ body.focus-mode #app { padding-bottom: 0; }
 .pick-mate i { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); flex: none; display: grid; place-items: center; transition: background .15s, border-color .15s; }
 .pick-mate[aria-pressed="true"] i { background: var(--accent); border-color: var(--accent); }
 .pick-mate[aria-pressed="true"] i::after { content: '✓'; color: var(--accent-ink); font-size: 14px; font-weight: 800; }
+
+.duels-toggle { width: 100%; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.duels-toggle .game-emoji.small { font-size: 22px; line-height: 28px; width: 28px; }
+.duels-toggle .icon { flex: none; width: 20px; height: 20px; fill: none; stroke: var(--muted); stroke-width: 2; transition: transform .2s; }
+.duels-toggle.is-open .icon { transform: rotate(180deg); }
+.duels-sent { display: flex; flex-direction: column; gap: 8px; animation: pop-in .2s ease-out; }
+.duels-sent .duel { margin-left: 14px; }
