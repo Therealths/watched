@@ -60,24 +60,11 @@ function castOf(d, kind) {
 
 /* ----- les familles de questions (chacune renvoie une question ou null) ----- */
 const gens = {
-  actor(T) {
-    if (T.cast.length < 4) return null;
-    const c = pick(T.cast.slice(0, 6));
-    return q(`Qui joue ${c.character} dans ${T.name} ?`, { l: c.name, img: c.photo },
-      sample(T.cast.filter(x => x !== c), 3).map(x => ({ l: x.name, img: x.photo })), { who: c.name, kind: 'actor' });
-  },
-  character(T) {
-    const withPhoto = T.cast.filter(c => c.photo);
-    if (T.cast.length < 4 || !withPhoto.length) return null;
-    const c = pick(withPhoto.slice(0, 6));
-    return q(`Quel personnage joue ${c.name} dans ${T.name} ?`, c.character,
-      sample(T.cast.filter(x => x !== c), 3).map(x => x.character), { img: c.photo, imgKind: 'profile', who: c.name, kind: 'character' });
-  },
   face(T) {
     const withPhoto = T.cast.filter(c => c.photo);
     if (T.cast.length < 4 || !withPhoto.length) return null;
     const c = pick(withPhoto.slice(0, 8));
-    return q(`Comment s’appelle ce personnage de ${T.name} ?`, c.character,
+    return q(`Qui est ce personnage de ${T.name} ?`, c.character,
       sample(T.cast.filter(x => x !== c), 3).map(x => x.character), { img: c.photo, imgKind: 'profile', who: c.name, kind: 'face' });
   },
   year(T) {
@@ -86,14 +73,14 @@ const gens = {
     const offs = sample([-4, -3, -2, -1, 1, 2, 3], 3).filter(o => y + o <= new Date().getFullYear() + 1);
     if (offs.length < 3) offs.push(-5, -6);
     const r = q(T.kind === 'tv' ? `En quelle année a commencé ${T.name} ?` : `En quelle année est sorti ${T.name} ?`,
-      String(y), offs.map(o => String(y + o)), { kind: 'year' });
+      String(y), offs.map(o => String(y + o)), { kind: 'year', who: '@year' });
     if (r) { const a = r.c[r.a].l; r.c.sort((x, b) => x.l - b.l); r.a = r.c.findIndex(c => c.l === a); }
     return r;
   },
   network(T) {
     const n = T.d.networks?.[0]?.name;
     if (T.kind !== 'tv' || !n) return null;
-    return q(`Où a été diffusée ${T.name} à l’origine ?`, n, sample(NETWORKS, 6), { kind: 'network' });
+    return q(`Où a été diffusée ${T.name} à l’origine ?`, n, sample(NETWORKS, 6), { kind: 'network', who: '@network' });
   },
   creator(T) {
     const n = T.d.created_by?.[0]?.name;
@@ -103,7 +90,7 @@ const gens = {
   director(T) {
     const n = T.d.credits?.crew?.find(c => c.job === 'Director')?.name;
     if (T.kind !== 'movie' || !n) return null;
-    return q(`Qui a réalisé ${T.name} ?`, n, sample(DIRECTORS, 6), { kind: 'director' });
+    return q(`Qui a réalisé ${T.name} ?`, n, sample(DIRECTORS, 6), { kind: 'director', who: '@director' });
   },
   seasons(T) {
     const n = T.d.number_of_seasons;
@@ -224,20 +211,15 @@ const gens = {
     if (!mine.length) return null;
     return q(`Lequel de ces genres correspond à ${T.name} ?`, pick(mine), sample(GENRES[T.kind].filter(g => !mine.includes(g)), 3), { kind: 'genre' });
   },
-  // Vrai ou faux : une affirmation sur le casting, l'année, la chaîne ou le réalisateur.
+  // Vrai ou faux : une affirmation sur l'année, la chaîne ou le réalisateur.
   tf(T) {
     const truth = Math.random() < .5, opts = [];
-    const cast = T.cast.filter(c => c.character);
-    if (cast.length >= 2) opts.push(() => {
-      const c = pick(cast.slice(0, 6)), other = pick(cast.filter(x => x !== c));
-      return tf(`Vrai ou faux : ${c.name} joue ${truth ? c.character : other.character} dans ${T.name}.`, truth, { who: c.name });
-    });
     const y = Number(T.year);
-    if (y) opts.push(() => tf(`Vrai ou faux : ${T.name} ${T.kind === 'tv' ? 'a commencé' : 'est sorti'} en ${truth ? y : y + pick([-3, -2, -1, 1, 2])}.`, truth));
+    if (y) opts.push(() => tf(`Vrai ou faux : ${T.name} ${T.kind === 'tv' ? 'a commencé' : 'est sorti'} en ${truth ? y : y + pick([-3, -2, -1, 1, 2])}.`, truth, { who: '@year' }));
     const net = T.d.networks?.[0]?.name;
-    if (T.kind === 'tv' && net) opts.push(() => tf(`Vrai ou faux : ${T.name} a d’abord été diffusée sur ${truth ? net : pick(NETWORKS.filter(n => n !== net))}.`, truth));
+    if (T.kind === 'tv' && net) opts.push(() => tf(`Vrai ou faux : ${T.name} a d’abord été diffusée sur ${truth ? net : pick(NETWORKS.filter(n => n !== net))}.`, truth, { who: '@network' }));
     const dir = T.d.credits?.crew?.find(c => c.job === 'Director')?.name;
-    if (T.kind === 'movie' && dir) opts.push(() => tf(`Vrai ou faux : ${T.name} a été réalisé par ${truth ? dir : pick(DIRECTORS.filter(n => n !== dir))}.`, truth));
+    if (T.kind === 'movie' && dir) opts.push(() => tf(`Vrai ou faux : ${T.name} a été réalisé par ${truth ? dir : pick(DIRECTORS.filter(n => n !== dir))}.`, truth, { who: '@director' }));
     if (!opts.length) return null;
     return { ...pick(opts)(), kind: 'tf' };
   },
@@ -279,19 +261,20 @@ function createQuiz({ tmdb }) {
   async function freeQuiz(kind, id) {
     const T = await titleData(kind, id, true);
     const plan = kind === 'tv'
-      ? ['actor', 'actor', 'character', 'face', 'face', 'year', 'network', 'creator', 'seasons', 'episodes', 'intruder', 'otherRole', 'otherRole',
-        'rating', 'country', 'genre', 'tf', 'tf', 'actor', 'face']
-      : ['actor', 'actor', 'character', 'face', 'face', 'year', 'director', 'runtime', 'saga', 'boxoffice', 'intruder', 'otherRole', 'otherRole',
-        'rating', 'country', 'genre', 'tf', 'tf', 'actor', 'face'];
-    // Chaque personne ne sert qu'une fois, et jamais deux fois la même question.
+      ? ['face', 'face', 'face', 'face', 'year', 'network', 'creator', 'seasons', 'episodes', 'intruder', 'otherRole', 'otherRole',
+        'rating', 'country', 'genre', 'tf', 'tf', 'face']
+      : ['face', 'face', 'face', 'face', 'year', 'director', 'runtime', 'saga', 'boxoffice', 'intruder', 'otherRole', 'otherRole',
+        'rating', 'country', 'genre', 'tf', 'tf', 'face'];
+    // Chaque personne (ou info : année, chaîne, réalisateur) ne sert qu'une fois, et jamais deux fois la même question.
     const out = [], usedWho = new Set(), usedText = new Set();
     for (let tries = 0; tries < 3 && out.length < 10; tries++) {
       for (const g of shuffle([...plan])) {
         if (out.length >= 10) break;
         const x = gens[g](T);
-        if (!x || usedText.has(x.t) || (x.who && usedWho.has(x.who))) continue;
+        const key = x && x.t + (x.img || '');
+        if (!x || usedText.has(key) || (x.who && usedWho.has(x.who))) continue;
         if (x.who) usedWho.add(x.who);
-        usedText.add(x.t); out.push(x);
+        usedText.add(key); out.push(x);
       }
     }
     return { title: T.name, questions: shuffle(out).slice(0, 10).map(strip) };
@@ -304,7 +287,7 @@ function createQuiz({ tmdb }) {
       try { pool.push(await titleData(t.kind, t.id)); } catch { /* titre indisponible */ }
       if (pool.length >= 16) break;
     }
-    const kinds = ['image', 'poster', 'synopsis', 'actor', 'face', 'tagline', 'year', 'intruder', 'rating', 'character', 'tf', 'network',
+    const kinds = ['image', 'poster', 'synopsis', 'face', 'tagline', 'year', 'intruder', 'rating', 'face', 'tf', 'network',
       'boxoffice', 'director', 'creator', 'episodes', 'seasons', 'country', 'runtime', 'genre', 'image', 'poster', 'synopsis'];
     const out = [];
     let k = 0;
