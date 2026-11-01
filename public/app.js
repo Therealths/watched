@@ -2154,8 +2154,7 @@ if (!calm() && !afterUpdate) {
   const sp = document.createElement('div');
   sp.id = 'splash';
   const pop = (txt, i, cls = '') => `<span class="sp-w ${cls}" style="--i:${i}">${txt}</span>`;
-  sp.innerHTML = `<i class="sp-blob b1"></i><i class="sp-blob b2"></i><i class="sp-blob b3"></i>
-    <div class="sp-in">${LOGO}
+  sp.innerHTML = `<div class="sp-in">${LOGO}
       <div class="sp-name">${pop('what', 0)}${pop('2', 1, 'two')}${pop('watch', 2)}</div>
       <div class="sp-tag">${'Tes séries. Tes films. Tes potes.'.split(' ').map((w, i) => pop(w, i, i % 2 ? 'hl' : '')).join(' ')}</div>
     </div>`;

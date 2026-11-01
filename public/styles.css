@@ -846,16 +846,10 @@ label.btn { cursor: pointer; }
 .skel-hero .sk-poster { width: 110px; aspect-ratio: 2 / 3; flex: none; }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: -50% 0; } }
 
-/* Ouverture : l'intro de la vidéo (halos qui dérivent, logo qui arrive en tournant, nom puis slogan mot par mot). */
+/* Ouverture : l'intro de la vidéo sur fond noir (logo qui arrive en tournant, nom puis slogan mot par mot). */
 #splash { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; overflow: hidden; background: #0B0D12; color: #EEF0F4; cursor: pointer; }
 #splash.out { animation: sp-out .45s ease-in forwards; }
 #splash.out .sp-in { animation: sp-up .45s ease-in forwards; }
-.sp-blob { position: absolute; border-radius: 50%; filter: blur(50px); opacity: .5; }
-.sp-blob.b1 { width: 85vw; height: 85vw; left: -25vw; top: -15vw; background: #FF9A2A; animation: sp-drift1 6s ease-in-out infinite alternate; }
-.sp-blob.b2 { width: 75vw; height: 75vw; right: -30vw; top: 40%; background: #6B4BFF; animation: sp-drift2 7s ease-in-out infinite alternate; }
-.sp-blob.b3 { width: 65vw; height: 65vw; left: -20vw; bottom: -20vw; background: #FF4F8B; animation: sp-drift1 8s ease-in-out infinite alternate-reverse; }
-@keyframes sp-drift1 { to { transform: translate(12vmin, 14vmin); } }
-@keyframes sp-drift2 { to { transform: translate(-10vmin, -16vmin); } }
 .sp-in { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 16px; }
 #splash .logo { width: min(34vw, 150px); height: auto; filter: drop-shadow(0 16px 32px rgba(255,154,42,.35)); animation: sp-logo .6s cubic-bezier(.3,1.6,.5,1) both; }
 #splash .logo path:nth-of-type(1) { transform-origin: 218px 222px; animation: sp-pulse .3s .6s ease-in-out both; }
