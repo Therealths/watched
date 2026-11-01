@@ -916,15 +916,21 @@ route('POST', /^\/api\/quiz\/start$/, async ({ user, body }) => {
     const { lastInsertRowid } = db.prepare(`INSERT INTO quiz_runs (user_id, mode, day, total, created_at) VALUES (?, 'daily', ?, ?, ?)`).run(user.id, day, total, Date.now());
     return { id: Number(lastInsertRowid), total, title: 'Quiz du jour' };
   }
-  const kind = body.kind === 'movie' ? 'movie' : body.kind === 'tv' ? 'tv' : null;
-  const id = int(body.id, 'id');
+  let kind = body.kind === 'movie' ? 'movie' : body.kind === 'tv' ? 'tv' : null;
+  let id = body.id == null ? 0 : int(body.id, 'id');
+  // Relever un défi : le titre est celui du défi, même si on ne l'a pas (encore) vu.
+  const ch = body.challenge ? db.prepare('SELECT * FROM quiz_challenges WHERE id = ? AND to_id = ?').get(int(body.challenge, 'challenge'), user.id) : null;
+  if (body.challenge && !ch) throw httpError(404, 'Défi introuvable.');
+  if (ch?.done_at) throw httpError(409, 'Tu as déjà relevé ce défi.');
+  if (ch) { kind = ch.kind; id = ch.tid; }
   if (!kind) throw httpError(400, 'Type invalide.');
   // Quiz libre : seulement sur ce qu'on a vu (et sur les épisodes vus, pour ne rien dévoiler).
+  // Pour un défi sur un titre pas vu : pas de question d'épisode du tout.
   let eps = [];
   if (kind === 'tv') {
     eps = db.prepare('SELECT s, e FROM watched WHERE user_id = ? AND show_id = ? ORDER BY s, e').all(user.id, id).map(r => ({ s: r.s, e: r.e }));
-    if (!eps.length) throw httpError(403, 'Regarde au moins un épisode avant de jouer à ce quiz.');
-  } else if (!db.prepare(`SELECT 1 FROM user_movies WHERE user_id = ? AND movie_id = ? AND status = 'watched'`).get(user.id, id)) {
+    if (!eps.length && !ch) throw httpError(403, 'Regarde au moins un épisode avant de jouer à ce quiz.');
+  } else if (!ch && !db.prepare(`SELECT 1 FROM user_movies WHERE user_id = ? AND movie_id = ? AND status = 'watched'`).get(user.id, id)) {
     throw httpError(403, 'Marque ce film comme vu avant de jouer à son quiz.');
   }
   rateLimit('quiz:' + user.id, 60, 3600e3);
@@ -933,7 +939,8 @@ route('POST', /^\/api\/quiz\/start$/, async ({ user, body }) => {
   if (questions.length < 5) throw httpError(422, 'Pas assez d’infos sur ce titre pour en faire un quiz.');
   const { lastInsertRowid } = db.prepare(`INSERT INTO quiz_runs (user_id, mode, day, kind, tid, questions, total, created_at) VALUES (?, 'free', ?, ?, ?, ?, ?, ?)`)
     .run(user.id, day, kind, id, JSON.stringify(questions), questions.length, Date.now());
-  return { id: Number(lastInsertRowid), total: questions.length, title };
+  if (ch) db.prepare('UPDATE quiz_challenges SET reply_run = ? WHERE id = ?').run(Number(lastInsertRowid), ch.id);
+  return { id: Number(lastInsertRowid), total: questions.length, title, kind, tid: id };
 });
 
 // Question en cours : le chrono démarre côté serveur à la première demande (recharger la page ne le remet pas à zéro).
@@ -977,6 +984,19 @@ function finishRun(run, user) {
     const rows = db.prepare(`SELECT user_id, score FROM quiz_runs WHERE mode = 'daily' AND day = ? AND finished_at IS NOT NULL AND ${inCircle} ORDER BY score DESC`).all(run.day);
     return { rank: rows.findIndex(r => r.user_id === user.id) + 1, players: rows.length };
   }
+  const ch = db.prepare('SELECT * FROM quiz_challenges WHERE reply_run = ? AND done_at IS NULL').get(run.id);
+  let duel = null;
+  if (ch) {
+    db.prepare('UPDATE quiz_challenges SET reply_score = ?, reply_correct = ?, reply_total = ?, done_at = ? WHERE id = ?').run(run.score, run.correct, run.total, Date.now(), ch.id);
+    const won = run.score > ch.score;
+    const from = db.prepare('SELECT name FROM users WHERE id = ?').get(ch.from_id);
+    duel = { won, tie: run.score === ch.score, name: from?.name || '?', score: ch.score, correct: ch.correct, total: ch.total };
+    notify(ch.from_id, 'games', `duel:${ch.id}`, {
+      title: won ? `😱 ${user.name} a relevé ton défi !` : run.score === ch.score ? `🤝 Égalité avec ${user.name} !` : `😎 ${user.name} n’a pas battu ton score`,
+      body: `Quiz ${brief(ch.kind, ch.tid).name} : ${run.correct}/${run.total} · ${run.score} pts (toi : ${ch.score} pts).`,
+      url: '#/amis/jeux', tag: `duel-${ch.id}`,
+    });
+  }
   const best = db.prepare(`SELECT user_id, MAX(score) score, correct FROM quiz_runs WHERE mode = 'free' AND kind = ? AND tid = ? AND finished_at IS NOT NULL AND id != ? AND ${inCircle}
     GROUP BY user_id ORDER BY score DESC`).all(run.kind, run.tid, run.id);
   const king = best[0];
@@ -987,7 +1007,40 @@ function finishRun(run, user) {
       body: `${run.correct}/${run.total} · ${run.score} points. À toi de reprendre ta place !`, url: `#/${run.kind}/${run.tid}`, tag: `beat-${run.kind}-${run.tid}`,
     });
   }
-  return { king: !king || run.score > king.score, record: run.score > myPrev, prev: myPrev || null };
+  return { king: !king || run.score > king.score, record: run.score > myPrev, prev: myPrev || null, duel };
+}
+
+// Défier des amis avec son meilleur score sur un titre.
+route('POST', /^\/api\/challenges$/, async ({ user, body }) => {
+  const kind = body.kind === 'movie' ? 'movie' : 'tv', id = int(body.id, 'id');
+  const best = db.prepare(`SELECT * FROM quiz_runs WHERE user_id = ? AND mode = 'free' AND kind = ? AND tid = ? AND finished_at IS NOT NULL ORDER BY score DESC LIMIT 1`).get(user.id, kind, id);
+  if (!best) throw httpError(400, 'Joue d’abord à ce quiz pour pouvoir défier tes amis.');
+  const mates = new Set(db.prepare(GROUP_MATES_SQL).all({ u: user.id }).map(r => r.user_id));
+  const to = [...new Set((Array.isArray(body.to) ? body.to : []).map(Number))].filter(x => mates.has(x)).slice(0, 30);
+  if (!to.length) throw httpError(400, 'Choisis au moins un ami.');
+  rateLimit('duel:' + user.id, 60, 3600e3);
+  const name = brief(kind, id).name;
+  for (const uid of to) {
+    // Un seul défi en cours par ami et par titre : le nouveau remplace l'ancien.
+    db.prepare('DELETE FROM quiz_challenges WHERE from_id = ? AND to_id = ? AND kind = ? AND tid = ? AND done_at IS NULL').run(user.id, uid, kind, id);
+    const { lastInsertRowid } = db.prepare(`INSERT INTO quiz_challenges (from_id, to_id, kind, tid, score, correct, total, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(user.id, uid, kind, id, best.score, best.correct, best.total, Date.now());
+    notify(uid, 'games', `chal:${lastInsertRowid}`, {
+      title: `⚔️ ${user.name} te défie au quiz ${name}`,
+      body: `${best.correct}/${best.total} · ${best.score} pts. À toi de faire mieux !`, url: '#/amis/jeux', tag: `chal-${kind}-${id}`,
+    });
+  }
+  return { sent: to.length };
+});
+
+function challengesFor(user) {
+  const out = c => ({ id: c.id, fromId: c.from_id, toId: c.to_id, kind: c.kind, title: brief(c.kind, c.tid), score: c.score, correct: c.correct, total: c.total,
+    at: c.created_at, done: !!c.done_at, reply: c.done_at ? { score: c.reply_score, correct: c.reply_correct, total: c.reply_total } : null });
+  const week = Date.now() - 7 * DAY;
+  return {
+    received: db.prepare('SELECT * FROM quiz_challenges WHERE to_id = ? AND (done_at IS NULL OR done_at > ?) ORDER BY done_at IS NOT NULL, created_at DESC LIMIT 20').all(user.id, week).map(out),
+    sent: db.prepare('SELECT * FROM quiz_challenges WHERE from_id = ? AND created_at > ? ORDER BY created_at DESC LIMIT 20').all(user.id, week).map(out),
+  };
 }
 
 // Onglet Jeux : quiz du jour, classements (du jour, du mois) et « qui connaît le mieux… ».
@@ -1011,9 +1064,11 @@ route('GET', /^\/api\/games$/, async ({ user, url }) => {
     const best = db.prepare(`SELECT user_id userId, correct, total, score FROM quiz_runs WHERE mode = 'free' AND kind = ? AND tid = ? AND finished_at IS NOT NULL AND ${inCircle} ORDER BY score DESC, finished_at LIMIT 1`).get(t.kind, t.tid);
     kings.push({ kind: t.kind, title: brief(t.kind, t.tid), ...best });
   }
+  const challenges = challengesFor(user);
   return {
-    day, month, daily: { played: !!mine?.finished_at, started: !!mine && !mine.finished_at, ...(mine?.finished_at ? { correct: mine.correct, total: mine.total, score: mine.score } : {}) },
-    today, monthRank, kings, users: usersById([...ids, ...kings.map(k => k.userId)]),
+    challenges, day, month, daily: { played: !!mine?.finished_at, started: !!mine && !mine.finished_at, ...(mine?.finished_at ? { correct: mine.correct, total: mine.total, score: mine.score } : {}) },
+    today, monthRank, kings,
+    users: usersById([...ids, ...kings.map(k => k.userId), ...challenges.received.map(c => c.fromId), ...challenges.sent.map(c => c.toId)]),
   };
 });
 

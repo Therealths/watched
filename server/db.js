@@ -209,6 +209,25 @@ function openDb(dir) {
     CREATE UNIQUE INDEX IF NOT EXISTS quiz_one_daily ON quiz_runs (user_id, day) WHERE mode = 'daily';
     CREATE INDEX IF NOT EXISTS quiz_runs_by_title ON quiz_runs (kind, tid, finished_at);
     CREATE INDEX IF NOT EXISTS quiz_runs_by_user ON quiz_runs (user_id, finished_at);
+    -- Défis : un membre lance son score sur un quiz à des amis ; chacun peut le relever une fois.
+    CREATE TABLE IF NOT EXISTS quiz_challenges (
+      id INTEGER PRIMARY KEY,
+      from_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      to_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      tid INTEGER NOT NULL,
+      score INTEGER NOT NULL,
+      correct INTEGER NOT NULL,
+      total INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      reply_run INTEGER,                      -- partie jouée par l'ami pour relever le défi
+      reply_score INTEGER,
+      reply_correct INTEGER,
+      reply_total INTEGER,
+      done_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS quiz_challenges_to ON quiz_challenges (to_id, done_at);
+    CREATE INDEX IF NOT EXISTS quiz_challenges_from ON quiz_challenges (from_id, created_at);
     -- Photos de profil (petites images envoyées par l'appli, déjà réduites).
     CREATE TABLE IF NOT EXISTS avatar_photos (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

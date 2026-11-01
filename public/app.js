@@ -1457,7 +1457,7 @@ function gamesHTML(cur) {
   const r = useData('/api/games' + (cur ? `?group=${cur.id}` : ''), 20e3);
   if (r.loading) return spinner();
   if (r.error) return errorBlock(r.error);
-  const { daily, today, monthRank, kings, users, month } = r.data;
+  const { daily, today, monthRank, kings, users, month, challenges } = r.data;
   const dailyCard = daily.played
     ? `<div class="game-daily done">
         <div class="game-emoji">🎯</div>
@@ -1473,7 +1473,7 @@ function gamesHTML(cur) {
     ? rankRows(today, users, x => ({ main: fmtPts(x.score), sub: `${x.correct}/${x.total}` }))
     : rankRows(monthRank, users, x => ({ main: fmtPts(x.points), sub: plural(x.played, 'partie', 'parties') }));
   const titles = quizzableTitles();
-  return `${dailyCard}
+  return `${duelsHTML(challenges, users)}${dailyCard}
     <h2>Classement</h2>
     ${seg('rankTab', tab, [['today', 'Aujourd’hui'], ['month', MONTHS[Number(month.slice(5)) - 1].replace(/^./, c => c.toUpperCase())]])}
     ${tab === 'month' ? `<p class="muted small gap-top">Points du quiz du jour + ton meilleur score sur chaque quiz libre du mois. Remise à zéro le 1ᵉʳ.</p>` : ''}
@@ -1481,10 +1481,13 @@ function gamesHTML(cur) {
     ${kings.length ? `<h2>Qui connaît le mieux…</h2>
       <div class="kings">${kings.map(k => {
         const u = users[k.userId];
-        return `<button class="king" data-act="quiz-start" data-mode="free" data-kind="${k.kind}" data-id="${k.title.id}">
+        const mine = k.userId === me.id;
+        return `<div class="king">
           ${poster(k.title.poster, k.title.name, 'w154')}
-          <span class="min0 grow"><b>${esc(k.title.name)}</b><span class="muted small">👑 ${esc(k.userId === me.id ? 'Toi' : u?.name || '?')} · ${k.correct}/${k.total} · ${fmtPts(k.score)}</span></span>
-          <span class="btn small">Défier</span></button>`;
+          <span class="min0 grow"><b>${esc(k.title.name)}</b><span class="muted small">👑 ${esc(mine ? 'Toi' : u?.name || '?')} · ${k.correct}/${k.total} · ${fmtPts(k.score)}</span></span>
+          ${mine
+            ? `<button class="btn small" data-act="duel-pick" data-kind="${k.kind}" data-id="${k.title.id}" data-name="${esc(k.title.name)}">⚔️ Défier</button>`
+            : `<button class="btn small" data-act="quiz-start" data-mode="free" data-kind="${k.kind}" data-id="${k.title.id}">Le battre</button>`}</div>`;
       }).join('')}</div>` : ''}
     <h2>Quiz libre</h2>
     ${titles.length
@@ -1492,6 +1495,74 @@ function gamesHTML(cur) {
         <div class="rail quiz-rail">${titles.slice(0, 30).map(t => `<button class="qtile" data-act="quiz-start" data-mode="free" data-kind="${t.kind}" data-id="${t.id}">
           ${poster(t.poster, t.name, 'w154')}<span>${esc(t.name)}</span></button>`).join('')}</div>`
       : `<p class="muted">Coche des épisodes ou des films vus pour débloquer leurs quiz.</p>`}`;
+}
+
+// Défis reçus (à relever, puis résultats) et défis envoyés de la semaine.
+function duelsHTML(ch, users) {
+  if (!ch || (!ch.received.length && !ch.sent.length)) return '';
+  const name = id => esc(users[id]?.name || '?');
+  const rows = [];
+  for (const c of ch.received) {
+    const u = users[c.fromId];
+    if (!c.done) rows.push(`<div class="duel open">${u ? avatar(u, 'sm') : ''}
+      <span class="min0 grow"><b>${name(c.fromId)}</b> te défie au quiz <b>${esc(c.title.name)}</b><span class="muted small">Score à battre : ${c.correct}/${c.total} · ${fmtPts(c.score)}</span></span>
+      <button class="btn small primary" data-act="quiz-start" data-mode="free" data-challenge="${c.id}">Relever</button></div>`);
+    else {
+      const won = c.reply.score > c.score;
+      rows.push(`<div class="duel">${u ? avatar(u, 'sm') : ''}
+        <span class="min0 grow">${won ? `🏆 Tu as battu <b>${name(c.fromId)}</b>` : c.reply.score === c.score ? `🤝 Égalité avec <b>${name(c.fromId)}</b>` : `😅 <b>${name(c.fromId)}</b> garde l’avantage`} sur <b>${esc(c.title.name)}</b>
+        <span class="muted small">${fmtPts(c.reply.score)} contre ${fmtPts(c.score)}</span></span></div>`);
+    }
+  }
+  for (const c of ch.sent) {
+    const u = users[c.toId];
+    const res = !c.done ? `<span class="muted small">En attente… ton score : ${fmtPts(c.score)}</span>`
+      : c.reply.score === c.score ? `<span class="muted small">🤝 Égalité : ${fmtPts(c.score)} chacun</span>`
+      : c.reply.score > c.score ? `<span class="muted small">😱 Ton score est battu : ${fmtPts(c.reply.score)} contre ${fmtPts(c.score)}</span>`
+      : `<span class="muted small">😎 Pas mieux que toi : ${fmtPts(c.reply.score)} contre ${fmtPts(c.score)}</span>`;
+    rows.push(`<div class="duel sent">${u ? avatar(u, 'sm') : ''}
+      <span class="min0 grow">Tu as défié <b>${name(c.toId)}</b> sur <b>${esc(c.title.name)}</b>${res}</span></div>`);
+  }
+  return `<h2>⚔️ Défis</h2><div class="duels">${rows.join('')}</div>`;
+}
+
+// Choisir les amis à défier (membres de mes groupes) ; renvoie leurs ids, ou [] si annulé.
+async function pickFriends(title) {
+  const g = await load('/api/groups', 60e3);
+  const ids = [...new Set(g.groups.flatMap(x => x.members))].filter(id => id !== me.id && g.users[id])
+    .sort((a, b) => g.users[a].name.localeCompare(g.users[b].name, 'fr'));
+  hideToast();
+  askEl.innerHTML = `<div class="askbox">
+      <h2 id="ask-title">${esc(title)}</h2>
+      ${ids.length ? `<p>Ils recevront ton score et une notification. À eux de faire mieux !</p>
+        <div class="pick-list">${ids.map(id => `<button type="button" class="pick-mate" data-uid="${id}" aria-pressed="false">${avatar(g.users[id], 'sm')}<span class="grow">${esc(g.users[id].name)}</span><i></i></button>`).join('')}</div>
+        <button type="button" class="btn primary" data-answer="yes" disabled>Envoyer le défi</button>`
+      : `<p>Personne dans tes groupes pour l’instant. Invite des amis depuis l’onglet Groupes.</p>`}
+      <button type="button" class="btn" data-answer="no">Annuler</button>
+    </div>`;
+  const send = askEl.querySelector('[data-answer="yes"]');
+  const toggle = ev => {
+    const b = ev.target.closest('.pick-mate'); if (!b) return;
+    b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true');
+    const n = askEl.querySelectorAll('.pick-mate[aria-pressed="true"]').length;
+    send.disabled = !n; send.textContent = n > 1 ? `Défier ${n} amis` : 'Envoyer le défi';
+  };
+  askEl.addEventListener('click', toggle);
+  askEl.returnValue = '';
+  askEl.showModal();
+  await new Promise(done => askEl.addEventListener('close', done, { once: true }));
+  askEl.removeEventListener('click', toggle);
+  return askEl.returnValue === 'yes' ? [...askEl.querySelectorAll('.pick-mate[aria-pressed="true"]')].map(b => Number(b.dataset.uid)) : [];
+}
+async function sendDuel(kind, id, name) {
+  const to = await pickFriends(`Défier qui au quiz ${name} ?`);
+  if (!to.length) return;
+  try {
+    const r = await post('/api/challenges', { kind, id: Number(id), to });
+    invalidate('/api/games');
+    toast(r.sent > 1 ? `Défi envoyé à ${r.sent} amis ⚔️` : 'Défi envoyé ⚔️');
+    rerender();
+  } catch (e) { fail(e); }
 }
 
 // Bloc « Quiz » sur la fiche d'un titre vu.
@@ -1506,7 +1577,10 @@ function quizBlock(kind, id) {
   return `<div class="pad"><div class="quiz-block">
     <span class="game-emoji">🎯</span>
     <div class="min0 grow"><b>Quiz ${kind === 'tv' ? 'de la série' : 'du film'}</b><div class="muted small">${line}</div></div>
-    <button class="btn small primary" data-act="quiz-start" data-mode="free" data-kind="${kind}" data-id="${id}">Jouer</button>
+    <span class="quiz-block-btns">
+      ${mine ? `<button class="btn small" data-act="duel-pick" data-kind="${kind}" data-id="${id}" data-name="${esc((kind === 'tv' ? state.shows[id]?.name : state.movies[id]?.title) || '')}">⚔️ Défier</button>` : ''}
+      <button class="btn small primary" data-act="quiz-start" data-mode="free" data-kind="${kind}" data-id="${id}">Jouer</button>
+    </span>
   </div></div>`;
 }
 
@@ -1518,7 +1592,7 @@ async function startQuiz(body) {
   if (location.hash !== '#/quiz') location.hash = '#/quiz'; else render();
   try {
     const r = await post('/api/quiz/start', body);
-    ui.quiz = { ...r, body, answers: [], q: null };
+    ui.quiz = { ...r, body: { ...body, kind: r.kind || body.kind, id: r.tid || body.id }, answers: [], q: null };
     await quizNext();
   } catch (e) { ui.quiz = null; history.back(); fail(e); }
 }
@@ -1571,7 +1645,8 @@ function paintAnswer(Q) {
 }
 const quizFeedback = Q => Q.res ? (Q.res.ok ? `<span class="quiz-gain">+${Q.res.pts}</span> Bonne réponse !` : Q.picked === -1 ? '⏱️ Trop tard !' : 'Raté !') : '';
 function quizCelebrate(Q) {
-  if (Q.result.correct === Q.total) { confetti(innerWidth / 2, innerHeight / 3, 60); setTimeout(() => confetti(innerWidth / 2, innerHeight / 3, 40), 400); }
+  if (Q.result.duel?.won) confetti(innerWidth / 2, innerHeight / 3, 50);
+  else if (Q.result.correct === Q.total) { confetti(innerWidth / 2, innerHeight / 3, 60); setTimeout(() => confetti(innerWidth / 2, innerHeight / 3, 40), 400); }
   else if (Q.result.king || Q.result.rank === 1) confetti(innerWidth / 2, innerHeight / 3);
 }
 
@@ -1590,6 +1665,8 @@ function viewQuiz() {
     const msg = perfect ? 'Sans-faute ! 🔥' : R.correct >= Q.total * 0.7 ? 'Bien joué ! 👏' : R.correct >= Q.total * 0.4 ? 'Pas mal ! 🙂' : 'Aïe… revanche ? 😅';
     const extra = Q.body.mode === 'daily'
       ? `Tu es <b>${R.rank === 1 ? '1ᵉʳ 🥇' : R.rank + 'ᵉ'}</b> sur ${R.players} aujourd’hui.`
+      : R.duel ? (R.duel.won ? `🏆 Défi relevé : tu as battu <b>${esc(R.duel.name)}</b> (${fmtPts(R.duel.score)}) !`
+        : R.duel.tie ? `Égalité parfaite avec <b>${esc(R.duel.name)}</b> !` : `😅 <b>${esc(R.duel.name)}</b> garde l’avantage avec ${fmtPts(R.duel.score)}.`)
       : R.king ? '👑 Tu es le meilleur de ta bande sur ce quiz !' : R.record ? 'Nouveau record perso !' : R.prev ? `Ton record reste ${fmtPts(R.prev)}.` : '';
     return `<div class="pad quiz">${top}
       <div class="quiz-result">
@@ -1598,7 +1675,8 @@ function viewQuiz() {
         <p class="quiz-total">${fmtPts(R.score)}</p>
         ${extra ? `<p class="muted">${extra}</p>` : ''}
         <div class="quiz-end">
-          ${Q.body.mode === 'free' ? `<button class="btn primary" data-act="quiz-again">Rejouer</button><a class="btn" href="#/${Q.body.kind}/${Q.body.id}">Voir la fiche</a>` : ''}
+          ${Q.body.mode === 'free' ? `<button class="btn primary" data-act="duel-pick" data-kind="${Q.body.kind}" data-id="${Q.body.id}" data-name="${esc(Q.title)}">⚔️ Défier un ami</button>
+            ${Q.body.challenge ? '' : `<button class="btn" data-act="quiz-again">Rejouer</button>`}<a class="btn" href="#/${Q.body.kind}/${Q.body.id}">Voir la fiche</a>` : ''}
           <a class="btn ${Q.body.mode === 'daily' ? 'primary' : ''}" href="#/amis" data-act="go-games">Classement</a>
         </div>
       </div></div>`;
@@ -1924,6 +2002,10 @@ function route() {
   if (name === 'series' || name === 'films') {
     ui.collTab = name === 'films' ? 'movie' : 'tv'; name = 'collection';
     history.replaceState(null, '', '#/collection');
+  }
+  if (name === 'amis' && rest[0] === 'jeux') {
+    ui.amisTab = 'games'; rest = [];
+    history.replaceState(null, '', '#/amis');
   }
   return { name, args: rest.map(Number) };
 }
@@ -2534,12 +2616,13 @@ const actions = {
     for (const b of box.querySelectorAll('.star-btn.on')) { b.style.animationDelay = (b.dataset.n - 1) * 45 + 'ms'; replay(b, 'pop'); }
   },
   /* ----- réponses aux avis ----- */
-  ['quiz-start']({ mode, kind, id }, el) {
+  ['quiz-start']({ mode, kind, id, challenge }, el) {
     el.disabled = true;
-    startQuiz(mode === 'daily' ? { mode } : { mode, kind, id: Number(id) });
+    startQuiz(mode === 'daily' ? { mode } : challenge ? { mode, challenge: Number(challenge) } : { mode, kind, id: Number(id) });
   },
+  ['duel-pick']({ kind, id, name }) { sendDuel(kind, id, name); },
   ['quiz-pick']({ c }) { quizAnswer(Number(c)); },
-  ['quiz-again']() { startQuiz(ui.quiz.body); },
+  ['quiz-again']() { const { mode, kind, id } = ui.quiz.body; startQuiz({ mode, kind, id }); },
   async ['quiz-quit']() {
     const Q = ui.quiz;
     if (Q && !Q.result && Q.q && !await ask({ title: 'Quitter le quiz ?', text: Q.body.mode === 'daily' ? 'Le chrono continue : les questions non répondues compteront comme ratées.' : 'Ta partie s’arrête ici.', yes: 'Quitter', no: 'Continuer' })) return;
