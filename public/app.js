@@ -2043,8 +2043,10 @@ function render() {
     tabbar.hidden = true;
     return;
   }
-  tabbar.hidden = false;
   const r = route();
+  // Pendant un quiz, la barre du bas disparaît : tout l'écran sert aux réponses.
+  tabbar.hidden = r.name === 'quiz';
+  document.body.classList.toggle('focus-mode', r.name === 'quiz');
   // Sur Découvrir, on ne remplace que les résultats pour garder le clavier ouvert.
   if (r.name === 'decouvrir' && document.getElementById('q')) {
     document.getElementById('results').innerHTML = resultsHTML();
