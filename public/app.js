@@ -1527,7 +1527,7 @@ async function quizNext() {
   const r = await post(`/api/quiz/${Q.id}/next`);
   if (ui.quiz !== Q) return;
   Q.q = r.q; Q.i = r.i; Q.score = r.score; Q.title = r.title; Q.limit = r.limit; Q.deadline = Date.now() + r.left;
-  Q.picked = null; Q.res = null;
+  Q.picked = null; Q.res = null; Q.enter = true;
   rerender();
   quizTimer = setTimeout(() => quizAnswer(-1), r.left + 50);
 }
@@ -1536,12 +1536,12 @@ async function quizAnswer(c) {
   if (!Q?.q || Q.picked !== null) return;
   clearTimeout(quizTimer);
   Q.picked = c;
-  rerender();
+  paintAnswer(Q);
   try {
     const r = await post(`/api/quiz/${Q.id}/answer`, { i: Q.i, c });
     if (ui.quiz !== Q) return;
     Q.res = r; Q.score = r.score; Q.answers[Q.i] = r.ok;
-    rerender();
+    paintAnswer(Q);
     if (r.ok) replay(document.querySelector('.quiz-gain'), 'pop-in');
     quizTimer = setTimeout(() => {
       if (ui.quiz !== Q) return;
@@ -1550,6 +1550,26 @@ async function quizAnswer(c) {
     }, 1300);
   } catch (e) { fail(e); }
 }
+// Met à jour les boutons, le chrono, les étapes et le score sans redessiner l'écran (pas de saut).
+function paintAnswer(Q) {
+  const box = main.querySelector('.quiz-choices');
+  if (!box) return rerender();
+  main.querySelector('.quiz-timer')?.classList.add('stop');
+  for (const b of box.querySelectorAll('.quiz-c')) {
+    const i = Number(b.dataset.c);
+    b.disabled = true;
+    b.classList.remove('picked', 'right', 'wrong', 'dim');
+    if (Q.res) b.classList.add(i === Q.res.a ? 'right' : i === Q.picked ? 'wrong' : 'dim');
+    else if (i === Q.picked) b.classList.add('picked');
+  }
+  if (!Q.res) return;
+  main.querySelector('.quiz-feedback').innerHTML = quizFeedback(Q);
+  const step = main.querySelectorAll('.quiz-steps i')[Q.i];
+  if (step) step.className = Q.res.ok ? 'ok' : 'ko';
+  const sc = main.querySelector('.quiz-score');
+  if (sc) sc.textContent = fmtPts(Q.score);
+}
+const quizFeedback = Q => Q.res ? (Q.res.ok ? `<span class="quiz-gain">+${Q.res.pts}</span> Bonne réponse !` : Q.picked === -1 ? '⏱️ Trop tard !' : 'Raté !') : '';
 function quizCelebrate(Q) {
   if (Q.result.correct === Q.total) { confetti(innerWidth / 2, innerHeight / 3, 60); setTimeout(() => confetti(innerWidth / 2, innerHeight / 3, 40), 400); }
   else if (Q.result.king || Q.result.rank === 1) confetti(innerWidth / 2, innerHeight / 3);
@@ -1585,11 +1605,13 @@ function viewQuiz() {
   }
   if (!Q.q) return `<div class="pad quiz">${top}${spinner('Préparation des questions…')}</div>`;
   const left = Math.max(0, Q.deadline - Date.now());
+  // L'entrée glissée ne se joue qu'à l'arrivée d'une nouvelle question.
+  const enter = Q.enter; Q.enter = false;
   const withImg = Q.q.c.some(c => c.img !== undefined);
   const answered = Q.res, a = Q.res?.a;
   return `<div class="pad quiz">${top}
     <div class="quiz-timer ${answered || Q.picked !== null ? 'stop' : ''}"><i style="--from:${(left / Q.limit).toFixed(3)};animation-duration:${left}ms"></i></div>
-    <div class="quiz-body">
+    <div class="quiz-body ${enter ? 'enter' : ''}">
       ${Q.q.img ? `<div class="quiz-img ${Q.q.imgKind}"><img src="${IMG}${Q.q.imgKind === 'backdrop' ? 'w780' : 'w342'}${esc(Q.q.img)}" alt=""></div>` : ''}
       <h2 class="quiz-q">${esc(Q.q.t)}</h2>
       <div class="quiz-choices ${withImg ? 'faces' : ''}">${Q.q.c.map((c, i) => {
@@ -1597,7 +1619,7 @@ function viewQuiz() {
         return `<button class="quiz-c ${cls}" data-act="quiz-pick" data-c="${i}" ${Q.picked !== null ? 'disabled' : ''}>
           ${withImg ? `<span class="quiz-face">${c.img ? `<img src="${IMG}w185${esc(c.img)}" alt="" loading="eager">` : esc(c.l.slice(0, 1))}</span>` : ''}<span>${esc(c.l)}</span></button>`;
       }).join('')}</div>
-      <div class="quiz-feedback">${answered ? (Q.res.ok ? `<span class="quiz-gain">+${Q.res.pts}</span> Bonne réponse !` : Q.picked === -1 ? '⏱️ Trop tard !' : 'Raté !') : ''}</div>
+      <div class="quiz-feedback">${quizFeedback(Q)}</div>
     </div></div>`;
 }
 
@@ -2030,7 +2052,11 @@ function celebrate(before, after, s, sel) {
 }
 
 // Ouverture de l'appli : le logo « joue » une fois, sans bloquer l'écran.
-if (!calm()) {
+// Pas après le rechargement d'une mise à jour, ni dans l'appli installée sur Android (le téléphone affiche déjà son logo).
+let afterUpdate = false;
+try { afterUpdate = sessionStorage.getItem('w2w.updated') === '1'; sessionStorage.removeItem('w2w.updated'); } catch (e) { /* stockage bloqué */ }
+const androidApp = /android/i.test(navigator.userAgent) && matchMedia('(display-mode: standalone)').matches;
+if (!calm() && !afterUpdate && !androidApp) {
   const sp = document.createElement('div');
   sp.id = 'splash'; sp.innerHTML = LOGO;
   document.body.append(sp);
@@ -2965,6 +2991,7 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController || reloadingForUpdate) return;
     reloadingForUpdate = true;
+    try { sessionStorage.setItem('w2w.updated', '1'); } catch (e) { /* stockage bloqué */ }
     location.reload();
   });
   navigator.serviceWorker.addEventListener('message', e => { if (typeof e.data?.go === 'string' && e.data.go.startsWith('#/')) location.hash = e.data.go; });
