@@ -752,7 +752,7 @@ route('GET', /^\/api\/feed$/, async ({ user, url }) => {
       first: { s: Math.floor(r.first / 10000), e: r.first % 10000 }, last: { s: Math.floor(r.last / 10000), e: r.last % 10000 }, at: r.at })),
     ...movies.map(r => ({ type: 'movie', key: `movie:${r.user_id}:${r.movie_id}`, userId: r.user_id, title: brief('movie', r.movie_id), at: r.at })),
     ...reviews.map(r => ({ type: 'review', key: `review:${r.user_id}:${r.kind}:${r.tid}:${r.s}:${r.e}`, userId: r.user_id, ...reviewOut(r), title: brief(r.kind, r.tid) })),
-    ...db.prepare(`SELECT * FROM quiz_runs WHERE finished_at IS NOT NULL AND user_id IN (${MATES}) ORDER BY finished_at DESC LIMIT 30`).all(p)
+    ...bestRuns(db.prepare(`SELECT * FROM quiz_runs WHERE finished_at IS NOT NULL AND user_id IN (${MATES}) ORDER BY finished_at DESC LIMIT 150`).all(p)).slice(0, 30)
       .map(r => ({ type: 'quiz', key: `quiz:${r.user_id}:${r.id}`, userId: r.user_id, mode: r.mode, correct: r.correct, total: r.total, score: r.score,
         kind: r.kind, title: r.mode === 'free' ? brief(r.kind, r.tid) : { id: 0, name: 'Quiz du jour', poster: null }, at: r.finished_at })),
   ].sort((a, b) => b.at - a.at).slice(0, 80);
@@ -764,6 +764,16 @@ route('GET', /^\/api\/feed$/, async ({ user, url }) => {
   }
   return { items, users: usersById(ids) };
 });
+
+// Fil : un même quiz rejoué plusieurs fois par quelqu'un n'apparaît qu'une fois, avec son meilleur score.
+function bestRuns(runs) {
+  const best = new Map();
+  for (const r of runs) {
+    const k = r.mode === 'daily' ? `d:${r.id}` : `${r.user_id}:${r.kind}:${r.tid}`, b = best.get(k);
+    if (!b || r.score > b.score) best.set(k, r);
+  }
+  return [...best.values()].sort((a, b) => b.finished_at - a.finished_at);
+}
 
 /* ----- réactions emoji sur le fil ----- */
 const REACTIONS = ['😂', '🔥', '😱', '❤️', '👏'];
@@ -1041,9 +1051,19 @@ function challengesFor(user) {
   const out = c => ({ id: c.id, fromId: c.from_id, toId: c.to_id, kind: c.kind, title: brief(c.kind, c.tid), score: c.score, correct: c.correct, total: c.total,
     at: c.created_at, done: !!c.done_at, reply: c.done_at ? { score: c.reply_score, correct: c.reply_correct, total: c.reply_total } : null });
   const week = Date.now() - 7 * DAY;
+  // Un même quiz entre deux mêmes personnes ne compte qu'une fois : le défi en cours s'il y en a un, sinon le meilleur résultat.
+  const once = rows => {
+    const best = new Map();
+    for (const c of rows) {
+      const k = `${c.from_id}:${c.to_id}:${c.kind}:${c.tid}`, b = best.get(k);
+      if (!b || (!c.done_at && b.done_at) || (c.done_at && b.done_at && c.reply_score > b.reply_score)) best.set(k, c);
+    }
+    return [...best.values()];
+  };
   return {
-    received: db.prepare('SELECT * FROM quiz_challenges WHERE to_id = ? AND (done_at IS NULL OR done_at > ?) ORDER BY done_at IS NOT NULL, created_at DESC LIMIT 20').all(user.id, week).map(out),
-    sent: db.prepare('SELECT * FROM quiz_challenges WHERE from_id = ? AND created_at > ? ORDER BY created_at DESC LIMIT 20').all(user.id, week).map(out),
+    received: once(db.prepare('SELECT * FROM quiz_challenges WHERE to_id = ? AND (done_at IS NULL OR done_at > ?) ORDER BY created_at DESC LIMIT 60').all(user.id, week))
+      .sort((a, b) => !!a.done_at - !!b.done_at || b.created_at - a.created_at).slice(0, 20).map(out),
+    sent: once(db.prepare('SELECT * FROM quiz_challenges WHERE from_id = ? AND created_at > ? ORDER BY created_at DESC LIMIT 60').all(user.id, week)).slice(0, 20).map(out),
   };
 }
 
