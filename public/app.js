@@ -484,7 +484,9 @@ function seriesBody() {
       }).join('')}</div>`;
     }).join('');
   }
-  return `${shows.length ? seg('seriesTab', ui.seriesTab === 'all' ? 'all' : 'watch', [['watch', 'À regarder'], ['all', 'Toutes']]) : ''}
+  const jump = ui.seriesTab !== 'all' && body.includes('class="wlist"')
+    ? `<button type="button" class="btn small cal-jump" data-act="cal-jump">📅 Prochaines sorties</button>` : '';
+  return `${shows.length ? `<div class="seg-row">${seg('seriesTab', ui.seriesTab === 'all' ? 'all' : 'watch', [['watch', 'À regarder'], ['all', 'Toutes']])}${jump}</div>` : ''}
     ${body}`;
 }
 
@@ -500,8 +502,8 @@ function timelineHTML(shows) {
   const today = new Date();
   html += `<div class="nowline"><span>Aujourd’hui · ${esc(fmtLong.format(today))}</span></div>`;
 
-  const ups = upcomingEpisodes(shows);
-  if (!ups.length) return html + `<p class="muted gap-top">Aucune date de diffusion annoncée pour tes séries.</p>`;
+  const ups = [...upcomingEpisodes(shows), ...upcomingMovies()].sort((a, b) => a.d.localeCompare(b.d));
+  if (!ups.length) return html + `<p class="muted gap-top">Aucune date de sortie annoncée pour tes séries et tes films à voir.</p>`;
   let lastDay = null;
   for (const u of ups) {
     if (u.d !== lastDay) {
@@ -509,6 +511,13 @@ function timelineHTML(shows) {
       // Le jour même est déjà annoncé par la ligne « Aujourd'hui ».
       const n = dayDiff(u.d), d = parseDay(u.d);
       if (n > 0) html += `<div class="daylabel">${n === 1 ? 'Demain' : esc(fmtWeekday.format(d))}<small>${esc(fmtLong.format(d))}</small></div>`;
+    }
+    if (u.mv) {
+      html += `<a class="uprow" href="#/movie/${u.mv.id}">${poster(u.mv.poster, u.mv.title, 'w154')}
+        <div class="min0"><div class="uprow-name">${esc(u.mv.title)}</div>
+        <div class="uprow-ep"><span class="code">Film</span>Sortie en France</div></div>
+        ${daysLeft(dayDiff(u.d))}</a>`;
+      continue;
     }
     html += `<a class="uprow" href="#/ep/${u.sh.id}/${u.s}/${u.e}">${poster(u.sh.poster, u.sh.name, 'w154')}
       <div class="min0"><div class="uprow-name">${esc(u.sh.name)}</div>
@@ -531,6 +540,13 @@ function upcomingEpisodes(shows) {
     else if (sh.next.d && dayDiff(sh.next.d) >= 0) out.push({ sh, s: sh.next.s, e: sh.next.e, d: sh.next.d, name: sh.next.name });
   }
   return out.sort((a, b) => a.d.localeCompare(b.d) || a.sh.name.localeCompare(b.sh.name, 'fr') || a.e - b.e);
+}
+
+// Films « à voir » dont la sortie est annoncée (aujourd'hui ou plus tard).
+function upcomingMovies() {
+  return Object.values(state.movies)
+    .filter(m => m.status === 'watchlist' && m.release && dayDiff(m.release) >= 0)
+    .map(m => ({ mv: m, d: m.release }));
 }
 
 function daysLeft(n) {
@@ -1381,10 +1397,30 @@ function feedHTML(cur) {
     return `<article class="fitem">
       <a href="#/user/${u.id}">${avatar(u)}</a>
       <div class="min0"><a href="#/user/${u.id}" class="fname">${esc(u.name)}</a> <a href="${href}" class="fwhat">${what}</a>
-        <div class="muted small">${timeAgo(it.at)}</div></div>
+        <div class="muted small">${timeAgo(it.at)}</div>${reactRow(it, users)}</div>
       <a href="${href}" class="fposter" tabindex="-1">${poster(t.poster, t.name, 'w154')}</a>
     </article>`;
   }).join('')}</div>`;
+}
+
+// Réactions emoji sous une activité du fil : une pastille par emoji, + pour en choisir un.
+const REACTIONS = ['😂', '🔥', '😱', '❤️', '👏'];
+function reactRow(it, users) {
+  const rs = it.reactions || {}, k = esc(it.key);
+  const chips = REACTIONS.filter(e => rs[e]?.length).map(e => {
+    const who = rs[e].map(id => id === me.id ? 'toi' : users[id]?.name || '?').join(', ');
+    return `<button type="button" class="rchip ${rs[e].includes(me.id) ? 'mine' : ''}" data-act="react" data-k="${k}" data-e="${e}" data-who="${esc(who)}" aria-label="${e} : ${esc(who)}">${e}<small>${rs[e].length}</small></button>`;
+  }).join('');
+  const open = ui.reactOpen === it.key;
+  return `<div class="reacts">${chips}<button type="button" class="rchip radd ${open ? 'on' : ''}" data-act="react-pick" data-k="${k}" aria-label="Réagir" aria-expanded="${open}">🙂<small>+</small></button>${
+    open ? `<div class="rpicker">${REACTIONS.map(e => `<button type="button" data-act="react" data-k="${k}" data-e="${e}">${e}</button>`).join('')}</div>` : ''}</div>`;
+}
+// Applique une réaction tout de suite sur le fil en mémoire (le serveur confirme ensuite).
+function setFeedReactions(key, fn) {
+  for (const [url, hit] of mem) {
+    if (!url.startsWith('/api/feed') || !hit.data) continue;
+    for (const it of hit.data.items) if (it.key === key) it.reactions = fn(it.reactions || {});
+  }
 }
 
 /* ================= Suggestions des amis ================= */
@@ -1522,6 +1558,57 @@ function adminHTML() {
     ${cur}`;
 }
 
+/* ----- notifications sur le téléphone ----- */
+const NOTIF_TYPES = [
+  ['episodes', '📺 Nouvel épisode', 'le matin, quand un épisode d’une série que tu suis sort'],
+  ['recos', '💡 Conseils', 'quand un ami conseille une série ou un film'],
+  ['replies', '💬 Réponses', 'quand quelqu’un répond à un de tes avis'],
+  ['reactions', '😂 Réactions', 'quand quelqu’un réagit à ton activité'],
+];
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const b64uToBytes = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+async function deviceSub() {
+  const reg = await navigator.serviceWorker.getRegistration();
+  return reg?.pushManager.getSubscription() || null;
+}
+// Ce téléphone est-il abonné ? (vérifié une fois, puis tenu à jour par les boutons)
+function checkDeviceSub() {
+  if (ui.pushOn !== undefined || !pushSupported()) return;
+  ui.pushOn = null;
+  deviceSub().then(sub => {
+    ui.pushOn = !!sub;
+    // On redonne l'abonnement au serveur (il a pu changer, ou un autre compte a été utilisé sur ce téléphone).
+    if (sub) post('/api/push/subscribe', sub.toJSON()).catch(() => {});
+    rerender();
+  }, () => { ui.pushOn = false; rerender(); });
+}
+
+function notifHTML() {
+  let body;
+  if (!pushSupported()) {
+    body = isIOS() && !isInstalled()
+      ? `<p>Sur iPhone, les notifications marchent seulement avec l’appli installée : dans Safari, bouton Partager, puis <b>Sur l’écran d’accueil</b>. Ouvre ensuite what2watch depuis l’icône et reviens ici.</p>`
+      : `<p class="muted">Ce navigateur ne sait pas recevoir de notifications.</p>`;
+  } else if (Notification.permission === 'denied') {
+    body = `<p>Les notifications sont bloquées pour what2watch. Autorise-les dans les réglages de ton téléphone (ou du navigateur), puis reviens ici.</p>`;
+  } else {
+    checkDeviceSub();
+    if (ui.pushOn === null) body = spinner();
+    else if (!ui.pushOn) {
+      body = `<p>Reçois un petit message sur ce téléphone quand un épisode sort, qu’un ami te conseille un titre, ou qu’on réagit à ce que tu fais.</p>
+        <div class="row"><button class="btn small primary" data-act="push-on">Activer les notifications</button></div>`;
+    } else {
+      const r = useData('/api/push', 60e3);
+      const prefs = r.data?.prefs || {};
+      body = `<div class="toggles">${NOTIF_TYPES.map(([k, label, hint]) =>
+          `<button type="button" class="toggle" data-act="notif-pref" data-k="${k}" aria-pressed="${prefs[k] !== false}">
+            <span class="min0"><b>${label}</b><span class="muted small">${hint}</span></span><i></i></button>`).join('')}</div>
+        <div class="row gap-top"><button class="btn small" data-act="push-test">Envoyer un test</button><button class="btn small" data-act="push-off">Couper sur ce téléphone</button></div>`;
+    }
+  }
+  return `<h2>Notifications</h2><div class="panel">${body}</div>`;
+}
+
 function viewProfile() {
   const shows = Object.values(state.shows);
   let eps = 0, tvMin = 0, month = 0;
@@ -1549,6 +1636,8 @@ function viewProfile() {
   const settings = `<h2>Apparence</h2>
     ${seg('theme', ui.theme, [['auto', 'Auto'], ['light', 'Clair'], ['dark', 'Sombre']])}
     <p class="muted small gap-top">Auto suit le réglage clair ou sombre de ton téléphone.</p>
+
+    ${notifHTML()}
 
     <h2>Mon avatar</h2>
     <div class="panel">
@@ -2207,6 +2296,28 @@ const actions = {
     for (const b of box.querySelectorAll('.star-btn.on')) { b.style.animationDelay = (b.dataset.n - 1) * 45 + 'ms'; replay(b, 'pop'); }
   },
   /* ----- réponses aux avis ----- */
+  ['cal-jump']() {
+    const line = document.querySelector('.nowline');
+    if (line) scrollTo({ top: line.getBoundingClientRect().top + scrollY - 12, behavior: calm() ? 'auto' : 'smooth' });
+  },
+  ['react-pick']({ k }) { ui.reactOpen = ui.reactOpen === k ? null : k; rerender(); },
+  async react({ k, e }) {
+    if (pressedLong) return;
+    ui.reactOpen = null;
+    setFeedReactions(k, rs => {
+      const out = {}, wasMine = rs[e]?.includes(me.id);
+      for (const [x, ids] of Object.entries(rs)) { const left = ids.filter(id => id !== me.id); if (left.length) out[x] = left; }
+      if (!wasMine) (out[e] ||= []).push(me.id);
+      return out;
+    });
+    rerender();
+    replay(document.querySelector(`.rchip.mine[data-k="${CSS.escape(k)}"][data-e="${e}"]`), 'pop-in');
+    try {
+      const r = await post('/api/reactions', { item: k, emoji: e });
+      setFeedReactions(k, () => r.reactions);
+    } catch (err) { invalidate('/api/feed'); fail(err); }
+    rerender();
+  },
   ['replies-toggle']({ rk }) {
     ui.openReplies.has(rk) ? ui.openReplies.delete(rk) : ui.openReplies.add(rk);
     rerender();
@@ -2434,7 +2545,46 @@ const actions = {
   ['adv-more']() { ui.advPages++; render(); },
 
   /* ----- compte ----- */
+  async ['push-on'](_, el) {
+    el.disabled = true;
+    try {
+      if (await Notification.requestPermission() !== 'granted') { rerender(); return; }
+      const { key } = await load('/api/push', 0);
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
+      await post('/api/push/subscribe', sub.toJSON());
+      ui.pushOn = true; invalidate('/api/push');
+      toast('Notifications activées 🔔');
+    } catch (e) { fail(e); el.disabled = false; }
+    rerender();
+  },
+  async ['push-off']() {
+    try {
+      const sub = await deviceSub();
+      if (sub) { await post('/api/push/unsubscribe', { endpoint: sub.endpoint }); await sub.unsubscribe(); }
+      ui.pushOn = false; toast('Notifications coupées sur ce téléphone');
+    } catch (e) { fail(e); }
+    rerender();
+  },
+  async ['push-test'](_, el) {
+    el.disabled = true;
+    try { await post('/api/push/test'); toast('Envoyé : regarde tes notifications'); }
+    catch (e) { fail(e); }
+    el.disabled = false;
+  },
+  async ['notif-pref']({ k }, el) {
+    const on = el.getAttribute('aria-pressed') !== 'true';
+    el.setAttribute('aria-pressed', on);
+    try { mem.set('/api/push', { t: Date.now(), data: { ...mem.get('/api/push')?.data, ...(await post('/api/push/prefs', { [k]: on })) } }); }
+    catch (e) { el.setAttribute('aria-pressed', !on); fail(e); }
+  },
   async logout() {
+    // Ce téléphone ne doit plus recevoir les notifications de ce compte.
+    try {
+      const sub = pushSupported() && await deviceSub();
+      if (sub) { await post('/api/push/unsubscribe', { endpoint: sub.endpoint }); await sub.unsubscribe(); }
+    } catch { /* tant pis */ }
+    ui.pushOn = undefined;
     try { await post('/api/logout'); } catch (e) { /* on déconnecte quand même ce téléphone */ }
     LS.del('sequence.state.' + me.id); LS.del('sequence.queue.' + me.id); LS.del('sequence.me');
     me = null; state = { shows: {}, movies: {} }; queue = [];
@@ -2467,6 +2617,22 @@ document.addEventListener('click', ev => {
   if (!el || el.disabled) return;
   const fn = actions[el.dataset.act];
   if (fn) { ev.preventDefault(); fn({ ...el.dataset }, el); }
+});
+
+// Appui long sur une réaction : qui a réagi.
+let pressTimer, pressedLong = false;
+document.addEventListener('pointerdown', ev => {
+  const chip = ev.target.closest('.rchip[data-who]');
+  pressedLong = false;
+  if (chip) pressTimer = setTimeout(() => { pressedLong = true; toast(`${chip.dataset.e} ${chip.dataset.who}`); }, 450);
+});
+for (const t of ['pointerup', 'pointercancel', 'pointermove']) document.addEventListener(t, ev => {
+  if (t !== 'pointermove' || Math.abs(ev.movementX) + Math.abs(ev.movementY) > 6) clearTimeout(pressTimer);
+});
+document.addEventListener('contextmenu', ev => { if (ev.target.closest('.rchip')) ev.preventDefault(); });
+// Un appui ailleurs referme le choix d'emoji.
+document.addEventListener('click', ev => {
+  if (ui.reactOpen && !ev.target.closest('.reacts')) { ui.reactOpen = null; rerender(); }
 });
 
 let searchTimer;
@@ -2573,6 +2739,7 @@ if ('serviceWorker' in navigator) {
     reloadingForUpdate = true;
     location.reload();
   });
+  navigator.serviceWorker.addEventListener('message', e => { if (typeof e.data?.go === 'string' && e.data.go.startsWith('#/')) location.hash = e.data.go; });
   navigator.serviceWorker.register('sw.js').then(reg => reg.update()).catch(() => {});
 }
 var reloadingForUpdate = false;

@@ -19,6 +19,10 @@ if (fs.existsSync(file)) fs.rmSync(file);
 db.prepare('VACUUM INTO ?').run(file);
 db.close();
 
+// Clé des notifications : sans elle, tous les téléphones devraient se réabonner.
+const vapid = path.join(DATA, 'vapid.json');
+if (fs.existsSync(vapid)) fs.copyFileSync(vapid, path.join(OUT, 'vapid.json'));
+
 const old = fs.readdirSync(OUT).filter(f => /^what2watch-.*\.db$/.test(f)).sort();
 for (const f of old.slice(0, Math.max(0, old.length - KEEP))) fs.rmSync(path.join(OUT, f));
 console.log('Sauvegarde :', file);

@@ -156,6 +156,34 @@ function openDb(dir) {
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       PRIMARY KEY (ann_id, user_id)
     );
+    -- Réactions emoji sur le fil : item = clé de l'activité ('eps:<membre>:<série>:<jour>', 'movie:…', 'review:…').
+    CREATE TABLE IF NOT EXISTS reactions (
+      item TEXT NOT NULL,
+      owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      emoji TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      PRIMARY KEY (item, user_id)
+    );
+    -- Notifications : un abonnement par appareil, des réglages par membre, et un journal pour ne rien envoyer deux fois.
+    CREATE TABLE IF NOT EXISTS push_subs (
+      endpoint TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS push_subs_by_user ON push_subs (user_id);
+    CREATE TABLE IF NOT EXISTS notif_prefs (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      prefs TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS notif_log (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      key TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, key)
+    );
     -- Photos de profil (petites images envoyées par l'appli, déjà réduites).
     CREATE TABLE IF NOT EXISTS avatar_photos (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,

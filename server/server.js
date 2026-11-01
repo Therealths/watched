@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { openDb } = require('./db');
+const { initPush } = require('./push');
 
 const ROOT = path.resolve(__dirname, '..');
 loadEnv(path.join(ROOT, '.env'));
@@ -14,7 +15,9 @@ const HOST = process.env.HOST || '0.0.0.0';
 const TMDB_KEY = (process.env.TMDB_KEY || '').trim();
 const TMDB_BASE = process.env.TMDB_BASE || 'https://api.themoviedb.org/3';
 const PUBLIC_DIR = path.join(ROOT, 'public');
-const db = openDb(process.env.DATA_DIR || path.join(ROOT, 'data'));
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
+const db = openDb(DATA_DIR);
+const push = initPush(DATA_DIR, process.env.PUSH_SUBJECT || 'mailto:what2watch@users.noreply.github.com');
 
 const DAY = 86400e3;
 const SESSION_MAX_AGE = 365 * DAY;
@@ -69,7 +72,14 @@ function slimMovie(d) {
     id: d.id, title: d.title,
     poster: d.poster_path || null, backdrop: d.backdrop_path || null,
     year: (d.release_date || '').slice(0, 4), runtime: d.runtime || 0,
+    release: frRelease(d) || d.release_date || null,
   };
+}
+// Date de sortie en France (cinéma, sinon numérique), d'après release_dates si TMDB l'a fourni.
+function frRelease(d) {
+  const fr = d.release_dates?.results?.find(r => r.iso_3166_1 === 'FR')?.release_dates || [];
+  const pick = fr.find(r => r.type === 3) || fr.find(r => r.type === 2) || fr.find(r => r.type === 4) || fr[0];
+  return pick?.release_date?.slice(0, 10) || null;
 }
 
 const getTitle = db.prepare('SELECT meta, updated_at FROM titles WHERE kind = ? AND id = ?');
@@ -80,7 +90,7 @@ async function ensureTitle(kind, id, maxAge = Infinity) {
   const row = getTitle.get(kind, id);
   if (row && Date.now() - row.updated_at < maxAge) return JSON.parse(row.meta);
   try {
-    const d = await tmdb(`/${kind}/${id}`, {}, 0);
+    const d = await tmdb(`/${kind}/${id}`, kind === 'movie' ? { append_to_response: 'release_dates' } : {}, 0);
     const meta = kind === 'tv' ? slimShow(d) : slimMovie(d);
     putTitle.run(kind, id, JSON.stringify(meta), Date.now());
     return meta;
@@ -99,6 +109,18 @@ async function refreshTitles() {
     try { await ensureTitle('tv', id, 0); } catch { /* prochain passage */ }
     await new Promise(r => setTimeout(r, 300));
   }
+  // Films « à voir » pas encore sortis (ou sans date connue) : leur date de sortie peut changer.
+  const today = new Date().toISOString().slice(0, 10);
+  const movies = db.prepare(`SELECT DISTINCT um.movie_id id, t.meta FROM user_movies um
+    LEFT JOIN titles t ON t.kind = 'movie' AND t.id = um.movie_id
+    WHERE um.status = 'watchlist' AND (t.updated_at IS NULL OR t.updated_at < ?)`).all(Date.now() - META_MAX_AGE);
+  for (const { id, meta } of movies) {
+    const m = meta ? JSON.parse(meta) : null;
+    if (m && 'release' in m && m.release && m.release < today) continue;
+    try { await ensureTitle('movie', id, 0); } catch { /* prochain passage */ }
+    await new Promise(r => setTimeout(r, 300));
+  }
+  await sendEpisodeAlerts();
 }
 
 /* ================= Comptes et sessions ================= */
@@ -603,6 +625,13 @@ route('POST', /^\/api\/replies$/, async ({ user, body }) => {
   rateLimit('reply:' + user.id, 60, 3600e3);
   const { lastInsertRowid } = db.prepare('INSERT INTO review_replies (author_id, kind, tid, s, e, user_id, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(author, kind, id, s, e, user.id, text, Date.now());
+  if (author !== user.id) {
+    const t = brief(kind === 'movie' ? 'movie' : 'tv', id);
+    notify(author, 'replies', `reply:${lastInsertRowid}`, {
+      title: `💬 ${user.name} a répondu à ton avis sur ${kind === 'ep' ? `S${s}E${e} de ` : ''}${t.name}`,
+      body: text, url: kind === 'ep' ? `#/ep/${id}/${s}/${e}` : `#/${kind}/${id}`, tag: `reply-${kind}-${id}-${s}-${e}`,
+    });
+  }
   return { id: Number(lastInsertRowid) };
 });
 
@@ -656,8 +685,19 @@ route('POST', /^\/api\/recos$/, async ({ user, body }) => {
   const { kind, id } = pickBody(body);
   await ensureTitle(kind, id, META_MAX_AGE);
   const message = String(body.message || '').trim().slice(0, 500);
+  const isNew = !db.prepare('SELECT 1 FROM picks WHERE user_id = ? AND kind = ? AND tid = ?').get(user.id, kind, id);
   db.prepare(`INSERT INTO picks (user_id, kind, tid, message, created_at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (user_id, kind, tid) DO UPDATE SET message = excluded.message`).run(user.id, kind, id, message, Date.now());
+  if (isNew) {
+    const t = brief(kind, id);
+    for (const { user_id } of db.prepare(GROUP_MATES_SQL).all({ u: user.id })) {
+      notify(user_id, 'recos', `pick:${user.id}:${kind}:${id}`, {
+        title: `💡 ${user.name} te conseille ${t.name}`,
+        body: message || (kind === 'tv' ? 'Une série à découvrir.' : 'Un film à découvrir.'),
+        url: `#/${kind}/${id}`, tag: `pick-${kind}-${id}`,
+      });
+    }
+  }
   return { on: true };
 });
 
@@ -703,12 +743,134 @@ route('GET', /^\/api\/feed$/, async ({ user, url }) => {
     WHERE status = 'watched' AND user_id IN (${MATES}) ORDER BY watched_at DESC LIMIT 40`).all(p);
   const reviews = db.prepare(`SELECT * FROM reviews WHERE user_id IN (${MATES}) ORDER BY updated_at DESC LIMIT 40`).all(p);
   const items = [
-    ...eps.map(r => ({ type: 'eps', userId: r.user_id, title: brief('tv', r.show_id), n: r.n,
+    ...eps.map(r => ({ type: 'eps', key: `eps:${r.user_id}:${r.show_id}:${r.day}`, userId: r.user_id, title: brief('tv', r.show_id), n: r.n,
       first: { s: Math.floor(r.first / 10000), e: r.first % 10000 }, last: { s: Math.floor(r.last / 10000), e: r.last % 10000 }, at: r.at })),
-    ...movies.map(r => ({ type: 'movie', userId: r.user_id, title: brief('movie', r.movie_id), at: r.at })),
-    ...reviews.map(r => ({ type: 'review', userId: r.user_id, ...reviewOut(r), title: brief(r.kind, r.tid) })),
+    ...movies.map(r => ({ type: 'movie', key: `movie:${r.user_id}:${r.movie_id}`, userId: r.user_id, title: brief('movie', r.movie_id), at: r.at })),
+    ...reviews.map(r => ({ type: 'review', key: `review:${r.user_id}:${r.kind}:${r.tid}:${r.s}:${r.e}`, userId: r.user_id, ...reviewOut(r), title: brief(r.kind, r.tid) })),
   ].sort((a, b) => b.at - a.at).slice(0, 80);
-  return { items, users: usersById(items.map(i => i.userId)) };
+  const reacts = db.prepare('SELECT emoji, user_id FROM reactions WHERE item = ? ORDER BY at');
+  const ids = items.map(i => i.userId);
+  for (const it of items) {
+    it.reactions = {};
+    for (const r of reacts.all(it.key)) { (it.reactions[r.emoji] ||= []).push(r.user_id); ids.push(r.user_id); }
+  }
+  return { items, users: usersById(ids) };
+});
+
+/* ----- réactions emoji sur le fil ----- */
+const REACTIONS = ['😂', '🔥', '😱', '❤️', '👏'];
+const REACT_KEY_RE = /^(eps:\d+:\d+:\d{4}-\d\d-\d\d|movie:\d+:\d+|review:\d+:(tv|movie|ep):\d+:\d+:\d+)$/;
+// Même emoji = on retire ; autre emoji = on remplace. Une seule réaction par membre et par activité.
+route('POST', /^\/api\/reactions$/, async ({ user, body }) => {
+  const item = String(body.item || ''), emoji = String(body.emoji || '');
+  if (!REACT_KEY_RE.test(item) || !REACTIONS.includes(emoji)) throw httpError(400, 'Réaction invalide.');
+  const owner = Number(item.split(':')[1]);
+  if (owner !== user.id && !db.prepare(`SELECT 1 FROM (${GROUP_MATES_SQL}) WHERE user_id = :o`).get({ u: user.id, o: owner }))
+    throw httpError(404, 'Activité introuvable.');
+  const [type, , a, b, c, d] = item.split(':');
+  const exists = type === 'eps'
+    ? db.prepare(`SELECT 1 FROM watched WHERE user_id = ? AND show_id = ? AND date(at / 1000, 'unixepoch', 'localtime') = ? LIMIT 1`).get(owner, Number(a), b)
+    : type === 'movie' ? db.prepare(`SELECT 1 FROM user_movies WHERE user_id = ? AND movie_id = ? AND status = 'watched'`).get(owner, Number(a))
+    : db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND kind = ? AND tid = ? AND s = ? AND e = ?').get(owner, a, Number(b), Number(c), Number(d));
+  if (!exists) throw httpError(404, 'Activité introuvable.');
+  const cur = db.prepare('SELECT emoji FROM reactions WHERE item = ? AND user_id = ?').get(item, user.id);
+  if (cur?.emoji === emoji) db.prepare('DELETE FROM reactions WHERE item = ? AND user_id = ?').run(item, user.id);
+  else {
+    db.prepare('INSERT OR REPLACE INTO reactions (item, owner_id, user_id, emoji, at) VALUES (?, ?, ?, ?, ?)').run(item, owner, user.id, emoji, Date.now());
+    if (owner !== user.id && !cur) notifyReaction(owner, user, emoji, item);
+  }
+  const users = {};
+  for (const r of db.prepare('SELECT emoji, user_id FROM reactions WHERE item = ? ORDER BY at').all(item)) (users[r.emoji] ||= []).push(r.user_id);
+  return { reactions: users };
+});
+
+/* ----- notifications sur le téléphone ----- */
+const NOTIF_KINDS = ['episodes', 'recos', 'replies', 'reactions'];
+function notifPrefs(uid) {
+  const row = db.prepare('SELECT prefs FROM notif_prefs WHERE user_id = ?').get(uid);
+  const p = row ? JSON.parse(row.prefs) : {};
+  return Object.fromEntries(NOTIF_KINDS.map(k => [k, p[k] !== false]));
+}
+// Envoie à tous les appareils du membre, si ce type est activé et pas déjà envoyé (clé unique).
+function notify(uid, kind, key, msg) {
+  const subs = db.prepare('SELECT * FROM push_subs WHERE user_id = ?').all(uid);
+  if (!subs.length || (kind && !notifPrefs(uid)[kind])) return;
+  if (key && !db.prepare('INSERT OR IGNORE INTO notif_log (user_id, key, at) VALUES (?, ?, ?)').run(uid, key, Date.now()).changes) return;
+  for (const sub of subs) {
+    push.sendOne(sub, msg).then(r => {
+      if (r === 'gone') db.prepare('DELETE FROM push_subs WHERE endpoint = ?').run(sub.endpoint);
+    }, err => console.warn('Notification non envoyée :', err.message));
+  }
+}
+
+function notifyReaction(owner, user, emoji, item) {
+  const [type, , a, b, c, d] = item.split(':');
+  let what;
+  if (type === 'eps') what = `ce que tu as regardé (${brief('tv', Number(a)).name})`;
+  else if (type === 'movie') what = `ton film vu (${brief('movie', Number(a)).name})`;
+  else what = `ton avis sur ${a === 'ep' ? `S${c}E${d} de ` : ''}${brief(a === 'movie' ? 'movie' : 'tv', Number(b)).name}`;
+  notify(owner, 'reactions', `react:${item}:${user.id}`, { title: `${emoji} ${user.name} a réagi`, body: `À ${what}`, url: '#/amis', tag: 'react' });
+}
+
+// Nouveaux épisodes du jour pour les séries suivies : un seul message le matin (à partir de 9 h).
+const localDay = (t = new Date()) => `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+async function sendEpisodeAlerts() {
+  if (new Date().getHours() < 9) return;
+  const today = localDay();
+  const users = db.prepare('SELECT DISTINCT user_id FROM push_subs').all();
+  for (const { user_id } of users) {
+    if (!notifPrefs(user_id).episodes) continue;
+    const eps = [];
+    for (const r of db.prepare(`SELECT t.meta FROM user_shows us JOIN titles t ON t.kind = 'tv' AND t.id = us.show_id
+        WHERE us.user_id = ? AND us.archived = 0`).all(user_id)) {
+      const m = JSON.parse(r.meta);
+      for (const ep of [m.last, m.next]) if (ep?.d === today && !eps.some(x => x.m.id === m.id && x.ep.e === ep.e)) eps.push({ m, ep });
+    }
+    const fresh = eps.filter(({ m, ep }) => !db.prepare('SELECT 1 FROM notif_log WHERE user_id = ? AND key = ?').get(user_id, `ep:${m.id}:${ep.s}:${ep.e}`));
+    if (!fresh.length) continue;
+    for (const { m, ep } of fresh) db.prepare('INSERT OR IGNORE INTO notif_log (user_id, key, at) VALUES (?, ?, ?)').run(user_id, `ep:${m.id}:${ep.s}:${ep.e}`, Date.now());
+    const one = fresh.length === 1 ? fresh[0] : null;
+    notify(user_id, null, null, one
+      ? { title: `📺 Nouvel épisode de ${one.m.name}`, body: `S${one.ep.s}E${one.ep.e}${one.ep.name ? ' · ' + one.ep.name : ''} sort aujourd’hui.`,
+          url: `#/ep/${one.m.id}/${one.ep.s}/${one.ep.e}`, tag: 'episodes' }
+      : { title: `📺 ${fresh.length} nouveaux épisodes aujourd’hui`, body: fresh.map(x => x.m.name).join(', '), url: '#/collection', tag: 'episodes' });
+  }
+  db.prepare('DELETE FROM notif_log WHERE at < ?').run(Date.now() - 60 * DAY);
+}
+
+route('GET', /^\/api\/push$/, async ({ user }) => ({
+  key: push.publicKey, prefs: notifPrefs(user.id),
+  devices: db.prepare('SELECT COUNT(*) n FROM push_subs WHERE user_id = ?').get(user.id).n,
+}));
+route('POST', /^\/api\/push\/subscribe$/, async ({ user, body }) => {
+  const endpoint = String(body.endpoint || ''), p256dh = String(body.keys?.p256dh || ''), auth = String(body.keys?.auth || '');
+  if (!/^https:\/\/\S{10,1000}$/.test(endpoint) || !/^[\w-]{80,100}$/.test(p256dh) || !/^[\w-]{16,30}$/.test(auth))
+    throw httpError(400, 'Abonnement invalide.');
+  rateLimit('pushsub:' + user.id, 20, 3600e3);
+  // Un appareil ne reçoit que les notifications du dernier compte connecté dessus.
+  db.prepare(`INSERT INTO push_subs (endpoint, user_id, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`)
+    .run(endpoint, user.id, p256dh, auth, Date.now());
+  return { ok: true };
+});
+route('POST', /^\/api\/push\/unsubscribe$/, async ({ user, body }) => {
+  db.prepare('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?').run(String(body.endpoint || ''), user.id);
+  return { ok: true };
+});
+route('POST', /^\/api\/push\/prefs$/, async ({ user, body }) => {
+  const prefs = { ...notifPrefs(user.id) };
+  for (const k of NOTIF_KINDS) if (typeof body[k] === 'boolean') prefs[k] = body[k];
+  db.prepare('INSERT OR REPLACE INTO notif_prefs (user_id, prefs) VALUES (?, ?)').run(user.id, JSON.stringify(prefs));
+  return { prefs };
+});
+route('POST', /^\/api\/push\/test$/, async ({ user }) => {
+  rateLimit('pushtest:' + user.id, 10, 3600e3);
+  const subs = db.prepare('SELECT * FROM push_subs WHERE user_id = ?').all(user.id);
+  if (!subs.length) throw httpError(400, 'Aucun appareil abonné.');
+  const out = await Promise.allSettled(subs.map(sub => push.sendOne(sub, { title: '🍿 Ça marche !', body: 'Tu recevras tes notifications what2watch ici.', url: '#/profil', tag: 'test' })
+    .then(r => { if (r === 'gone') db.prepare('DELETE FROM push_subs WHERE endpoint = ?').run(sub.endpoint); return r; })));
+  if (!out.some(r => r.status === 'fulfilled' && r.value === 'ok')) throw httpError(502, 'Le service de notifications n’a pas répondu.');
+  return { ok: true };
 });
 
 /* ================= Serveur HTTP ================= */

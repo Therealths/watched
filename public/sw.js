@@ -1,5 +1,5 @@
 // Garde l'appli disponible hors connexion. Change VERSION à chaque mise à jour des fichiers.
-const VERSION = 'what2watch-v22';
+const VERSION = 'what2watch-v23';
 const SHELL = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png',
@@ -30,5 +30,28 @@ self.addEventListener('fetch', e => {
     const res = await fetch(e.request);
     if (res.ok) cache.put(e.request, res.clone());
     return res;
+  }));
+});
+
+// Notifications : affichées même appli fermée ; un appui ouvre la bonne page.
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data.json(); } catch { d = { title: 'what2watch', body: e.data?.text() || '' }; }
+  e.waitUntil(self.registration.showNotification(d.title || 'what2watch', {
+    body: d.body || '', tag: d.tag, renotify: !!d.tag, data: { url: d.url || '#/' },
+    icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', lang: 'fr',
+  }));
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const url = new URL(self.registration.scope);
+  url.hash = (e.notification.data?.url || '#/').replace(/^#/, '');
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async list => {
+    const win = list.find(c => c.url.startsWith(self.registration.scope));
+    if (!win) return self.clients.openWindow(url.href);
+    // Appli déjà ouverte : on la ramène devant et elle va elle-même à la bonne page (sans tout recharger).
+    await win.focus();
+    win.postMessage({ go: url.hash });
   }));
 });
