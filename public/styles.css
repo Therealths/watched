@@ -878,3 +878,18 @@ label.btn { cursor: pointer; }
   background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / .3); transition: transform .2s; }
 .toggle[aria-pressed="true"] i { background: var(--accent); }
 .toggle[aria-pressed="true"] i::after { transform: translateX(18px); }
+
+/* ---------- invitation à activer les notifications ---------- */
+.push-invite {
+  display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 12px; align-items: start;
+  margin: 4px 0 16px; padding: 14px 12px; border-radius: var(--radius);
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--accent);
+}
+.push-invite .row { margin-top: 10px; }
+.push-bell { font-size: 28px; line-height: 40px; text-align: center; transform-origin: 50% 10%; animation: bell-ring 2.4s ease-in-out 1s 2; }
+@keyframes bell-ring {
+  0%, 40%, 100% { transform: rotate(0); }
+  5% { transform: rotate(16deg); } 10% { transform: rotate(-14deg); } 15% { transform: rotate(10deg); }
+  20% { transform: rotate(-8deg); } 25% { transform: rotate(4deg); } 30% { transform: rotate(-2deg); }
+}
+@media (prefers-reduced-motion: reduce) { .push-bell { animation: none; } }

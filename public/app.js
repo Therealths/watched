@@ -461,6 +461,7 @@ function viewCollection() {
   const nTv = Object.keys(state.shows).length, nMv = Object.keys(state.movies).length;
   return `<div class="pad">
     <header class="top"><h1>Collection</h1></header>
+    ${pushInviteHTML()}
     ${tabs('collTab', ui.collTab, [['tv', `Séries · ${nTv}`], ['movie', `Films · ${nMv}`]])}
     <div class="subseg">${ui.collTab === 'movie' ? filmsBody() : seriesBody()}</div>
   </div>`;
@@ -1583,6 +1584,35 @@ function checkDeviceSub() {
   }, () => { ui.pushOn = false; rerender(); });
 }
 
+async function enablePush() {
+  if (await Notification.requestPermission() !== 'granted') { rerender(); return false; }
+  const { key } = await load('/api/push', 0);
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
+  await post('/api/push/subscribe', sub.toJSON());
+  ui.pushOn = true; invalidate('/api/push');
+  toast('Notifications activées 🔔');
+  rerender();
+  return true;
+}
+// Peut-on proposer les notifications ? (jamais demandées sur ce téléphone, pas encore abonné, pas repoussé récemment)
+function canAskPush() {
+  if (!me || !pushSupported() || Notification.permission !== 'default') return false;
+  checkDeviceSub();
+  return ui.pushOn === false;
+}
+const PUSH_LATER = 'sequence.pushLater';
+function pushInviteHTML() {
+  if (!canAskPush() || Date.now() < (LS.get(PUSH_LATER) || 0)) return '';
+  return `<div class="push-invite">
+    <span class="push-bell" aria-hidden="true">🔔</span>
+    <div class="min0"><b>Ne rate plus aucun épisode</b>
+      <div class="muted small">Active les notifications : on te prévient quand un nouvel épisode sort ou quand quelqu’un répond à tes avis.</div>
+      <div class="row"><button class="btn small primary" data-act="push-invite-on">Activer</button><button class="btn small" data-act="push-later">Plus tard</button></div>
+    </div>
+  </div>`;
+}
+
 function notifHTML() {
   let body;
   if (!pushSupported()) {
@@ -2374,7 +2404,8 @@ const actions = {
       invalidate('/api/feed', '/api/users/', '/api/reviews/mine');
       rerender();
       replay(main.querySelector(`[data-act="review-delete"][data-dk="${dk}"]`)?.closest('.review'), 'glow');
-      toast('Avis publié pour tes amis');
+      if (canAskPush()) toast('Avis publié. Être prévenu des réponses ?', { label: 'Activer 🔔', run: () => enablePush().catch(fail) });
+      else toast('Avis publié pour tes amis');
     } catch (err) { el.disabled = false; fail(err); }
   },
   async ['review-delete']({ dk, url }, el) {
@@ -2547,16 +2578,18 @@ const actions = {
   /* ----- compte ----- */
   async ['push-on'](_, el) {
     el.disabled = true;
+    try { await enablePush(); } catch (e) { fail(e); el.disabled = false; }
+  },
+  async ['push-invite-on'](_, el) {
+    el.disabled = true;
     try {
-      if (await Notification.requestPermission() !== 'granted') { rerender(); return; }
-      const { key } = await load('/api/push', 0);
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
-      await post('/api/push/subscribe', sub.toJSON());
-      ui.pushOn = true; invalidate('/api/push');
-      toast('Notifications activées 🔔');
+      // Refusé : on ne redemande pas avant un mois.
+      if (!await enablePush()) LS.set(PUSH_LATER, Date.now() + 30 * DAY_MS);
     } catch (e) { fail(e); el.disabled = false; }
-    rerender();
+  },
+  ['push-later']() {
+    LS.set(PUSH_LATER, Date.now() + 14 * DAY_MS);
+    collapse(document.querySelector('.push-invite')).then(rerender);
   },
   async ['push-off']() {
     try {
