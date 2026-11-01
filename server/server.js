@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { openDb } = require('./db');
 const { initPush } = require('./push');
+const { createQuiz } = require('./quiz');
 
 const ROOT = path.resolve(__dirname, '..');
 loadEnv(path.join(ROOT, '.env'));
@@ -747,6 +748,9 @@ route('GET', /^\/api\/feed$/, async ({ user, url }) => {
       first: { s: Math.floor(r.first / 10000), e: r.first % 10000 }, last: { s: Math.floor(r.last / 10000), e: r.last % 10000 }, at: r.at })),
     ...movies.map(r => ({ type: 'movie', key: `movie:${r.user_id}:${r.movie_id}`, userId: r.user_id, title: brief('movie', r.movie_id), at: r.at })),
     ...reviews.map(r => ({ type: 'review', key: `review:${r.user_id}:${r.kind}:${r.tid}:${r.s}:${r.e}`, userId: r.user_id, ...reviewOut(r), title: brief(r.kind, r.tid) })),
+    ...db.prepare(`SELECT * FROM quiz_runs WHERE finished_at IS NOT NULL AND user_id IN (${MATES}) ORDER BY finished_at DESC LIMIT 30`).all(p)
+      .map(r => ({ type: 'quiz', key: `quiz:${r.user_id}:${r.id}`, userId: r.user_id, mode: r.mode, correct: r.correct, total: r.total, score: r.score,
+        kind: r.kind, title: r.mode === 'free' ? brief(r.kind, r.tid) : { id: 0, name: 'Quiz du jour', poster: null }, at: r.finished_at })),
   ].sort((a, b) => b.at - a.at).slice(0, 80);
   const reacts = db.prepare('SELECT emoji, user_id FROM reactions WHERE item = ? ORDER BY at');
   const ids = items.map(i => i.userId);
@@ -759,7 +763,7 @@ route('GET', /^\/api\/feed$/, async ({ user, url }) => {
 
 /* ----- réactions emoji sur le fil ----- */
 const REACTIONS = ['😂', '🔥', '😱', '❤️', '👏'];
-const REACT_KEY_RE = /^(eps:\d+:\d+:\d{4}-\d\d-\d\d|movie:\d+:\d+|review:\d+:(tv|movie|ep):\d+:\d+:\d+)$/;
+const REACT_KEY_RE = /^(eps:\d+:\d+:\d{4}-\d\d-\d\d|movie:\d+:\d+|review:\d+:(tv|movie|ep):\d+:\d+:\d+|quiz:\d+:\d+)$/;
 // Même emoji = on retire ; autre emoji = on remplace. Une seule réaction par membre et par activité.
 route('POST', /^\/api\/reactions$/, async ({ user, body }) => {
   const item = String(body.item || ''), emoji = String(body.emoji || '');
@@ -771,6 +775,7 @@ route('POST', /^\/api\/reactions$/, async ({ user, body }) => {
   const exists = type === 'eps'
     ? db.prepare(`SELECT 1 FROM watched WHERE user_id = ? AND show_id = ? AND date(at / 1000, 'unixepoch', 'localtime') = ? LIMIT 1`).get(owner, Number(a), b)
     : type === 'movie' ? db.prepare(`SELECT 1 FROM user_movies WHERE user_id = ? AND movie_id = ? AND status = 'watched'`).get(owner, Number(a))
+    : type === 'quiz' ? db.prepare('SELECT 1 FROM quiz_runs WHERE user_id = ? AND id = ? AND finished_at IS NOT NULL').get(owner, Number(a))
     : db.prepare('SELECT 1 FROM reviews WHERE user_id = ? AND kind = ? AND tid = ? AND s = ? AND e = ?').get(owner, a, Number(b), Number(c), Number(d));
   if (!exists) throw httpError(404, 'Activité introuvable.');
   const cur = db.prepare('SELECT emoji FROM reactions WHERE item = ? AND user_id = ?').get(item, user.id);
@@ -785,7 +790,7 @@ route('POST', /^\/api\/reactions$/, async ({ user, body }) => {
 });
 
 /* ----- notifications sur le téléphone ----- */
-const NOTIF_KINDS = ['episodes', 'recos', 'replies', 'reactions'];
+const NOTIF_KINDS = ['episodes', 'recos', 'replies', 'reactions', 'games'];
 function notifPrefs(uid) {
   const row = db.prepare('SELECT prefs FROM notif_prefs WHERE user_id = ?').get(uid);
   const p = row ? JSON.parse(row.prefs) : {};
@@ -808,6 +813,7 @@ function notifyReaction(owner, user, emoji, item) {
   let what;
   if (type === 'eps') what = `ce que tu as regardé (${brief('tv', Number(a)).name})`;
   else if (type === 'movie') what = `ton film vu (${brief('movie', Number(a)).name})`;
+  else if (type === 'quiz') what = 'ton score au quiz';
   else what = `ton avis sur ${a === 'ep' ? `S${c}E${d} de ` : ''}${brief(a === 'movie' ? 'movie' : 'tv', Number(b)).name}`;
   notify(owner, 'reactions', `react:${item}:${user.id}`, { title: `${emoji} ${user.name} a réagi`, body: `À ${what}`, url: '#/amis', tag: 'react' });
 }
@@ -871,6 +877,154 @@ route('POST', /^\/api\/push\/test$/, async ({ user }) => {
     .then(r => { if (r === 'gone') db.prepare('DELETE FROM push_subs WHERE endpoint = ?').run(sub.endpoint); return r; })));
   if (!out.some(r => r.status === 'fulfilled' && r.value === 'ok')) throw httpError(502, 'Le service de notifications n’a pas répondu.');
   return { ok: true };
+});
+
+/* ----- jeux : quiz et classements ----- */
+const quiz = createQuiz({ tmdb });
+const QUIZ_LIMIT = 15e3, QUIZ_GRACE = 3e3;
+const runQuestions = run => JSON.parse(run.mode === 'daily' ? db.prepare('SELECT questions FROM quiz_daily WHERE day = ?').get(run.day).questions : run.questions);
+const quizTitle = run => run.mode === 'daily' ? 'Quiz du jour' : brief(run.kind, run.tid).name;
+// Titres les plus regardés de l'appli (pour le quiz du jour).
+function popularTitles() {
+  return db.prepare(`SELECT 'tv' kind, show_id id, COUNT(DISTINCT user_id) n FROM watched GROUP BY show_id
+    UNION ALL SELECT 'movie', movie_id, COUNT(*) FROM user_movies WHERE status = 'watched' GROUP BY movie_id
+    ORDER BY n DESC LIMIT 25`).all();
+}
+let dailyBuilding = null;
+async function ensureDaily(day) {
+  if (db.prepare('SELECT 1 FROM quiz_daily WHERE day = ?').get(day)) return;
+  dailyBuilding ||= quiz.dailyQuiz(popularTitles()).then(qs => {
+    if (qs.length < 5) throw httpError(503, 'Pas assez de séries et films regardés pour préparer le quiz du jour.');
+    db.prepare('INSERT OR IGNORE INTO quiz_daily (day, questions, created_at) VALUES (?, ?, ?)').run(day, JSON.stringify(qs), Date.now());
+  }).finally(() => { dailyBuilding = null; });
+  await dailyBuilding;
+}
+function myRun(id, user) {
+  const run = db.prepare('SELECT * FROM quiz_runs WHERE id = ? AND user_id = ?').get(id, user.id);
+  if (!run) throw httpError(404, 'Partie introuvable.');
+  return run;
+}
+
+route('POST', /^\/api\/quiz\/start$/, async ({ user, body }) => {
+  const day = localDay();
+  if (body.mode === 'daily') {
+    const done = db.prepare(`SELECT * FROM quiz_runs WHERE user_id = ? AND day = ? AND mode = 'daily'`).get(user.id, day);
+    if (done?.finished_at) throw httpError(409, 'Tu as déjà joué au quiz du jour. Reviens demain !');
+    if (done) return { id: done.id, total: done.total, title: 'Quiz du jour' };
+    await ensureDaily(day);
+    const total = JSON.parse(db.prepare('SELECT questions FROM quiz_daily WHERE day = ?').get(day).questions).length;
+    const { lastInsertRowid } = db.prepare(`INSERT INTO quiz_runs (user_id, mode, day, total, created_at) VALUES (?, 'daily', ?, ?, ?)`).run(user.id, day, total, Date.now());
+    return { id: Number(lastInsertRowid), total, title: 'Quiz du jour' };
+  }
+  const kind = body.kind === 'movie' ? 'movie' : body.kind === 'tv' ? 'tv' : null;
+  const id = int(body.id, 'id');
+  if (!kind) throw httpError(400, 'Type invalide.');
+  // Quiz libre : seulement sur ce qu'on a vu (et sur les épisodes vus, pour ne rien dévoiler).
+  let eps = [];
+  if (kind === 'tv') {
+    eps = db.prepare('SELECT s, e FROM watched WHERE user_id = ? AND show_id = ? ORDER BY s, e').all(user.id, id).map(r => ({ s: r.s, e: r.e }));
+    if (!eps.length) throw httpError(403, 'Regarde au moins un épisode avant de jouer à ce quiz.');
+  } else if (!db.prepare(`SELECT 1 FROM user_movies WHERE user_id = ? AND movie_id = ? AND status = 'watched'`).get(user.id, id)) {
+    throw httpError(403, 'Marque ce film comme vu avant de jouer à son quiz.');
+  }
+  rateLimit('quiz:' + user.id, 60, 3600e3);
+  await ensureTitle(kind, id, META_MAX_AGE);
+  const { title, questions } = await quiz.freeQuiz(kind, id, eps);
+  if (questions.length < 5) throw httpError(422, 'Pas assez d’infos sur ce titre pour en faire un quiz.');
+  const { lastInsertRowid } = db.prepare(`INSERT INTO quiz_runs (user_id, mode, day, kind, tid, questions, total, created_at) VALUES (?, 'free', ?, ?, ?, ?, ?, ?)`)
+    .run(user.id, day, kind, id, JSON.stringify(questions), questions.length, Date.now());
+  return { id: Number(lastInsertRowid), total: questions.length, title };
+});
+
+// Question en cours : le chrono démarre côté serveur à la première demande (recharger la page ne le remet pas à zéro).
+route('POST', /^\/api\/quiz\/(\d+)\/next$/, async ({ user, match }) => {
+  const run = myRun(Number(match[1]), user);
+  if (run.finished_at) throw httpError(409, 'Partie terminée.');
+  const answers = JSON.parse(run.answers), i = answers.length;
+  const qx = runQuestions(run)[i];
+  let served = run.served_at;
+  if (!served) { served = Date.now(); db.prepare('UPDATE quiz_runs SET served_at = ? WHERE id = ?').run(served, run.id); }
+  return { i, total: run.total, score: run.score, title: quizTitle(run), q: { t: qx.t, img: qx.img || null, imgKind: qx.imgKind || null, c: qx.c },
+    limit: QUIZ_LIMIT, left: Math.max(0, QUIZ_LIMIT - (Date.now() - served)) };
+});
+
+route('POST', /^\/api\/quiz\/(\d+)\/answer$/, async ({ user, match, body }) => {
+  const run = myRun(Number(match[1]), user);
+  if (run.finished_at) throw httpError(409, 'Partie terminée.');
+  const answers = JSON.parse(run.answers), i = answers.length;
+  if (Number(body.i) !== i || !run.served_at) throw httpError(409, 'Question déjà passée.');
+  const qs = runQuestions(run), qx = qs[i];
+  const ms = Date.now() - run.served_at;
+  const choice = Number.isInteger(body.c) ? body.c : -1;
+  const ok = choice === qx.a && ms <= QUIZ_LIMIT + QUIZ_GRACE;
+  // 100 points par bonne réponse, jusqu'à 50 de plus si on répond vite.
+  const pts = ok ? 100 + Math.round(50 * Math.max(0, QUIZ_LIMIT - ms) / QUIZ_LIMIT) : 0;
+  answers.push({ c: choice, ok, pts });
+  const score = run.score + pts, correct = run.correct + (ok ? 1 : 0), done = answers.length >= qs.length;
+  db.prepare('UPDATE quiz_runs SET answers = ?, score = ?, correct = ?, served_at = NULL, finished_at = ? WHERE id = ?')
+    .run(JSON.stringify(answers), score, correct, done ? Date.now() : null, run.id);
+  const out = { ok, a: qx.a, pts, score, correct, done };
+  if (done) out.result = finishRun({ ...run, score, correct }, user);
+  return out;
+});
+
+// Fin de partie : rang du jour ou meilleur score sur ce titre ; on prévient celui qu'on vient de détrôner.
+function finishRun(run, user) {
+  const mates = db.prepare(GROUP_MATES_SQL).all({ u: user.id }).map(r => r.user_id);
+  const circle = [user.id, ...mates];
+  const inCircle = `user_id IN (${circle.map(Number).join(',')})`;
+  if (run.mode === 'daily') {
+    const rows = db.prepare(`SELECT user_id, score FROM quiz_runs WHERE mode = 'daily' AND day = ? AND finished_at IS NOT NULL AND ${inCircle} ORDER BY score DESC`).all(run.day);
+    return { rank: rows.findIndex(r => r.user_id === user.id) + 1, players: rows.length };
+  }
+  const best = db.prepare(`SELECT user_id, MAX(score) score, correct FROM quiz_runs WHERE mode = 'free' AND kind = ? AND tid = ? AND finished_at IS NOT NULL AND id != ? AND ${inCircle}
+    GROUP BY user_id ORDER BY score DESC`).all(run.kind, run.tid, run.id);
+  const king = best[0];
+  const myPrev = best.find(b => b.user_id === user.id)?.score || 0;
+  if (king && king.user_id !== user.id && run.score > king.score) {
+    notify(king.user_id, 'games', `beat:${run.id}`, {
+      title: `🏆 ${user.name} a battu ton score au quiz ${brief(run.kind, run.tid).name}`,
+      body: `${run.correct}/${run.total} · ${run.score} points. À toi de reprendre ta place !`, url: `#/${run.kind}/${run.tid}`, tag: `beat-${run.kind}-${run.tid}`,
+    });
+  }
+  return { king: !king || run.score > king.score, record: run.score > myPrev, prev: myPrev || null };
+}
+
+// Onglet Jeux : quiz du jour, classements (du jour, du mois) et « qui connaît le mieux… ».
+route('GET', /^\/api\/games$/, async ({ user, url }) => {
+  const gid = Number(url.searchParams.get('group')) || 0;
+  if (gid) myGroup(gid, user);
+  const ids = [user.id, ...db.prepare(gid ? ONE_GROUP_SQL : GROUP_MATES_SQL).all(gid ? { u: user.id, g: gid } : { u: user.id }).map(r => r.user_id)];
+  const inCircle = `user_id IN (${ids.map(Number).join(',')})`;
+  const day = localDay(), month = day.slice(0, 7);
+  const mine = db.prepare(`SELECT correct, total, score, finished_at FROM quiz_runs WHERE user_id = ? AND day = ? AND mode = 'daily'`).get(user.id, day);
+  const today = db.prepare(`SELECT user_id userId, correct, total, score FROM quiz_runs WHERE mode = 'daily' AND day = ? AND finished_at IS NOT NULL AND ${inCircle} ORDER BY score DESC`).all(day);
+  // Mois : quiz du jour + meilleur score de chaque quiz libre (rejouer ne fait pas gonfler les points).
+  const pts = new Map();
+  const add = (uid, n, played) => { const p = pts.get(uid) || { userId: uid, points: 0, played: 0 }; p.points += n; p.played += played; pts.set(uid, p); };
+  for (const r of db.prepare(`SELECT user_id, score FROM quiz_runs WHERE mode = 'daily' AND finished_at IS NOT NULL AND substr(day, 1, 7) = ? AND ${inCircle}`).all(month)) add(r.user_id, r.score, 1);
+  for (const r of db.prepare(`SELECT user_id, MAX(score) score, COUNT(*) n FROM quiz_runs WHERE mode = 'free' AND finished_at IS NOT NULL AND substr(day, 1, 7) = ? AND ${inCircle} GROUP BY user_id, kind, tid`).all(month)) add(r.user_id, r.score, r.n);
+  const monthRank = [...pts.values()].sort((a, b) => b.points - a.points);
+  // Meilleur joueur par titre (tous les temps), titres joués le plus récemment d'abord.
+  const kings = [];
+  for (const t of db.prepare(`SELECT kind, tid, MAX(finished_at) at FROM quiz_runs WHERE mode = 'free' AND finished_at IS NOT NULL AND ${inCircle} GROUP BY kind, tid ORDER BY at DESC LIMIT 20`).all()) {
+    const best = db.prepare(`SELECT user_id userId, correct, total, score FROM quiz_runs WHERE mode = 'free' AND kind = ? AND tid = ? AND finished_at IS NOT NULL AND ${inCircle} ORDER BY score DESC, finished_at LIMIT 1`).get(t.kind, t.tid);
+    kings.push({ kind: t.kind, title: brief(t.kind, t.tid), ...best });
+  }
+  return {
+    day, month, daily: { played: !!mine?.finished_at, started: !!mine && !mine.finished_at, ...(mine?.finished_at ? { correct: mine.correct, total: mine.total, score: mine.score } : {}) },
+    today, monthRank, kings, users: usersById([...ids, ...kings.map(k => k.userId)]),
+  };
+});
+
+// Sur la fiche d'un titre : le meilleur du cercle et mon record.
+route('GET', /^\/api\/games\/title\/(tv|movie)\/(\d+)$/, async ({ user, match }) => {
+  const [, kind, id] = match;
+  const ids = [user.id, ...db.prepare(GROUP_MATES_SQL).all({ u: user.id }).map(r => r.user_id)];
+  const inCircle = `user_id IN (${ids.map(Number).join(',')})`;
+  const king = db.prepare(`SELECT user_id userId, correct, total, score FROM quiz_runs WHERE mode = 'free' AND kind = ? AND tid = ? AND finished_at IS NOT NULL AND ${inCircle} ORDER BY score DESC, finished_at LIMIT 1`).get(kind, Number(id));
+  const mine = db.prepare(`SELECT correct, total, score FROM quiz_runs WHERE mode = 'free' AND kind = ? AND tid = ? AND finished_at IS NOT NULL AND user_id = ? ORDER BY score DESC LIMIT 1`).get(kind, Number(id), user.id);
+  return { king: king || null, mine: mine || null, users: king ? usersById([king.userId]) : {} };
 });
 
 /* ================= Serveur HTTP ================= */

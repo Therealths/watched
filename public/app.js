@@ -1071,6 +1071,8 @@ function viewTv(id) {
     </div>`;
   }
 
+  actions += quizBlock('tv', id);
+
   let prog = '';
   if (sh) {
     const p = progress(base);
@@ -1192,6 +1194,7 @@ function viewMovie(id) {
       <button class="btn grow ${seen ? 'primary' : ''}" data-act="m-seen" data-id="${id}" aria-pressed="${seen}">${ICON.check} ${seen ? 'Vu' : 'J’ai vu'}</button>
       ${recoBtn('movie', id)}
     </div>
+    ${quizBlock('movie', id)}
     ${seen && m.watchedAt ? `<div class="pad muted">Vu le ${new Date(m.watchedAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</div>` : ''}
     ${suggestedBy('movie', id)}
     ${genresBlock(d)}
@@ -1214,8 +1217,8 @@ function viewAmis() {
   else if (!groups.length) body = `<div class="empty"><b>Aucun groupe pour l’instant</b>
       <p>Crée un groupe pour tes potes, ta famille ou tes collègues, puis invite-les avec un lien. Tu verras ici ce qu’ils regardent.</p>
       <button class="btn primary" data-act="group-new">${ICON.plus} Créer un groupe</button></div>`;
-  else body = `${tabs('amisTab', ui.amisTab, [['feed', 'Activité'], ['friends', 'Membres'], ['groups', 'Groupes']])}
-    ${ui.amisTab === 'friends' ? membersHTML(r.data, cur) : ui.amisTab === 'groups' ? groupsTabHTML(r.data) : feedHTML(cur)}`;
+  else body = `${tabs('amisTab', ui.amisTab, [['feed', 'Activité'], ['friends', 'Membres'], ['groups', 'Groupes'], ['games', 'Jeux']])}
+    ${ui.amisTab === 'friends' ? membersHTML(r.data, cur) : ui.amisTab === 'groups' ? groupsTabHTML(r.data) : ui.amisTab === 'games' ? gamesHTML(cur) : feedHTML(cur)}`;
   return `<div class="pad">
     <header class="top"><h1>Amis</h1></header>
     ${groups.length ? `<div class="gchips">
@@ -1387,6 +1390,9 @@ function feedHTML(cur) {
       what = it.n === 1
         ? `a vu <b>${code(it.first.s, it.first.e)}</b> de <b>${esc(t.name)}</b>`
         : `a vu <b>${it.n} épisodes</b> de <b>${esc(t.name)}</b> <span class="muted">(${code(it.first.s, it.first.e)} → ${code(it.last.s, it.last.e)})</span>`;
+    } else if (it.type === 'quiz') {
+      href = it.mode === 'free' ? `#/${it.kind}/${t.id}` : '#/amis';
+      what = `a fait <b>${it.correct}/${it.total}</b> ${it.mode === 'free' ? `au quiz <b>${esc(t.name)}</b>` : 'au <b>quiz du jour</b>'} <span class="muted">· ${fmtPts(it.score)}</span>${it.correct === it.total ? ' 🔥' : ''}`;
     } else if (it.type === 'movie') {
       href = `#/movie/${t.id}`;
       what = `a vu le film <b>${esc(t.name)}</b>`;
@@ -1399,7 +1405,7 @@ function feedHTML(cur) {
       <a href="#/user/${u.id}">${avatar(u)}</a>
       <div class="min0"><a href="#/user/${u.id}" class="fname">${esc(u.name)}</a> <a href="${href}" class="fwhat">${what}</a>
         <div class="muted small">${timeAgo(it.at)}</div>${reactRow(it, users)}</div>
-      <a href="${href}" class="fposter" tabindex="-1">${poster(t.poster, t.name, 'w154')}</a>
+      ${it.type === 'quiz' && it.mode === 'daily' ? `<span class="fposter fquiz" aria-hidden="true">🎯</span>` : `<a href="${href}" class="fposter" tabindex="-1">${poster(t.poster, t.name, 'w154')}</a>`}
     </article>`;
   }).join('')}</div>`;
 }
@@ -1422,6 +1428,177 @@ function setFeedReactions(key, fn) {
     if (!url.startsWith('/api/feed') || !hit.data) continue;
     for (const it of hit.data.items) if (it.key === key) it.reactions = fn(it.reactions || {});
   }
+}
+
+/* ================= Jeux : quiz et classements ================= */
+const fmtPts = n => `${Number(n).toLocaleString('fr-FR')} pts`;
+const MEDALS = ['🥇', '🥈', '🥉'];
+const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+
+function rankRows(rows, users, value) {
+  if (!rows.length) return `<p class="muted gap-top">Personne n’a encore joué. Lance-toi !</p>`;
+  return `<div class="ranks">${rows.map((r, i) => {
+    const u = users[r.userId]; if (!u) return '';
+    return `<a class="rank-row ${r.userId === me.id ? 'me' : ''}" href="#/user/${u.id}">
+      <span class="rank-n">${MEDALS[i] || i + 1}</span>${avatar(u, 'sm')}
+      <span class="grow min0"><b>${esc(r.userId === me.id ? 'Toi' : u.name)}</b>${value(r).sub ? `<span class="muted small"> · ${value(r).sub}</span>` : ''}</span>
+      <b class="rank-pts">${value(r).main}</b></a>`;
+  }).join('')}</div>`;
+}
+
+// Séries (au moins un épisode vu) et films vus, les plus récents d'abord : de quoi lancer un quiz libre.
+function quizzableTitles() {
+  const tv = Object.values(state.shows).filter(sh => Object.keys(sh.watched).length).map(sh => ({ kind: 'tv', id: sh.id, name: sh.name, poster: sh.poster, at: lastWatchedAt(sh) }));
+  const mv = Object.values(state.movies).filter(m => m.status === 'watched').map(m => ({ kind: 'movie', id: m.id, name: m.title, poster: m.poster, at: m.watchedAt || 0 }));
+  return [...tv, ...mv].sort((a, b) => b.at - a.at);
+}
+
+function gamesHTML(cur) {
+  const r = useData('/api/games' + (cur ? `?group=${cur.id}` : ''), 20e3);
+  if (r.loading) return spinner();
+  if (r.error) return errorBlock(r.error);
+  const { daily, today, monthRank, kings, users, month } = r.data;
+  const dailyCard = daily.played
+    ? `<div class="game-daily done">
+        <div class="game-emoji">🎯</div>
+        <div class="min0"><b>Quiz du jour</b><div class="muted small">Tu as fait <b>${daily.correct}/${daily.total}</b> · ${fmtPts(daily.score)}. Nouveau quiz demain !</div></div>
+      </div>`
+    : `<div class="game-daily">
+        <div class="game-emoji">🎯</div>
+        <div class="min0"><b>Quiz du jour</b><div class="muted small">10 questions sur les séries et films les plus regardés de la bande. Une seule tentative, les mêmes questions pour tout le monde !</div>
+        <button class="btn primary small" data-act="quiz-start" data-mode="daily">${daily.started ? 'Reprendre' : 'Jouer'}</button></div>
+      </div>`;
+  const tab = ui.rankTab || 'today';
+  const ranks = tab === 'today'
+    ? rankRows(today, users, x => ({ main: fmtPts(x.score), sub: `${x.correct}/${x.total}` }))
+    : rankRows(monthRank, users, x => ({ main: fmtPts(x.points), sub: plural(x.played, 'partie', 'parties') }));
+  const titles = quizzableTitles();
+  return `${dailyCard}
+    <h2>Classement</h2>
+    ${seg('rankTab', tab, [['today', 'Aujourd’hui'], ['month', MONTHS[Number(month.slice(5)) - 1].replace(/^./, c => c.toUpperCase())]])}
+    ${tab === 'month' ? `<p class="muted small gap-top">Points du quiz du jour + ton meilleur score sur chaque quiz libre du mois. Remise à zéro le 1ᵉʳ.</p>` : ''}
+    ${ranks}
+    ${kings.length ? `<h2>Qui connaît le mieux…</h2>
+      <div class="kings">${kings.map(k => {
+        const u = users[k.userId];
+        return `<button class="king" data-act="quiz-start" data-mode="free" data-kind="${k.kind}" data-id="${k.title.id}">
+          ${poster(k.title.poster, k.title.name, 'w154')}
+          <span class="min0 grow"><b>${esc(k.title.name)}</b><span class="muted small">👑 ${esc(k.userId === me.id ? 'Toi' : u?.name || '?')} · ${k.correct}/${k.total} · ${fmtPts(k.score)}</span></span>
+          <span class="btn small">Défier</span></button>`;
+      }).join('')}</div>` : ''}
+    <h2>Quiz libre</h2>
+    ${titles.length
+      ? `<p class="muted small">Choisis une série ou un film que tu as vu. Pas de spoiler : les questions portent seulement sur les épisodes que tu as vus.</p>
+        <div class="rail quiz-rail">${titles.slice(0, 30).map(t => `<button class="qtile" data-act="quiz-start" data-mode="free" data-kind="${t.kind}" data-id="${t.id}">
+          ${poster(t.poster, t.name, 'w154')}<span>${esc(t.name)}</span></button>`).join('')}</div>`
+      : `<p class="muted">Coche des épisodes ou des films vus pour débloquer leurs quiz.</p>`}`;
+}
+
+// Bloc « Quiz » sur la fiche d'un titre vu.
+function quizBlock(kind, id) {
+  const seen = kind === 'tv' ? Object.keys(state.shows[id]?.watched || {}).length : state.movies[id]?.status === 'watched';
+  if (!seen) return '';
+  const r = useData(`/api/games/title/${kind}/${id}`, 60e3);
+  const k = r.data?.king, mine = r.data?.mine;
+  const line = k
+    ? `👑 ${k.userId === me.id ? 'Tu es le meilleur' : `<b>${esc(r.data.users[k.userId]?.name || '?')}</b> connaît le mieux`} · ${k.correct}/${k.total}${mine && k.userId !== me.id ? ` · ton record : ${mine.correct}/${mine.total}` : ''}`
+    : 'Personne n’a encore joué. Sois le premier !';
+  return `<div class="pad"><div class="quiz-block">
+    <span class="game-emoji">🎯</span>
+    <div class="min0 grow"><b>Quiz ${kind === 'tv' ? 'de la série' : 'du film'}</b><div class="muted small">${line}</div></div>
+    <button class="btn small primary" data-act="quiz-start" data-mode="free" data-kind="${kind}" data-id="${id}">Jouer</button>
+  </div></div>`;
+}
+
+// Écran de quiz (#/quiz) : état dans ui.quiz, chrono calculé depuis l'échéance (un nouvel affichage ne le relance pas).
+let quizTimer = null;
+async function startQuiz(body) {
+  clearTimeout(quizTimer);
+  ui.quiz = { loading: true, ...body };
+  if (location.hash !== '#/quiz') location.hash = '#/quiz'; else render();
+  try {
+    const r = await post('/api/quiz/start', body);
+    ui.quiz = { ...r, body, answers: [], q: null };
+    await quizNext();
+  } catch (e) { ui.quiz = null; history.back(); fail(e); }
+}
+async function quizNext() {
+  const Q = ui.quiz; if (!Q) return;
+  const r = await post(`/api/quiz/${Q.id}/next`);
+  if (ui.quiz !== Q) return;
+  Q.q = r.q; Q.i = r.i; Q.score = r.score; Q.title = r.title; Q.limit = r.limit; Q.deadline = Date.now() + r.left;
+  Q.picked = null; Q.res = null;
+  rerender();
+  quizTimer = setTimeout(() => quizAnswer(-1), r.left + 50);
+}
+async function quizAnswer(c) {
+  const Q = ui.quiz;
+  if (!Q?.q || Q.picked !== null) return;
+  clearTimeout(quizTimer);
+  Q.picked = c;
+  rerender();
+  try {
+    const r = await post(`/api/quiz/${Q.id}/answer`, { i: Q.i, c });
+    if (ui.quiz !== Q) return;
+    Q.res = r; Q.score = r.score; Q.answers[Q.i] = r.ok;
+    rerender();
+    if (r.ok) replay(document.querySelector('.quiz-gain'), 'pop-in');
+    quizTimer = setTimeout(() => {
+      if (ui.quiz !== Q) return;
+      if (r.done) { Q.result = { ...r.result, correct: r.correct, score: r.score }; Q.q = null; rerender(); quizCelebrate(Q); invalidate('/api/games', '/api/feed'); }
+      else quizNext().catch(fail);
+    }, 1300);
+  } catch (e) { fail(e); }
+}
+function quizCelebrate(Q) {
+  if (Q.result.correct === Q.total) { confetti(innerWidth / 2, innerHeight / 3, 60); setTimeout(() => confetti(innerWidth / 2, innerHeight / 3, 40), 400); }
+  else if (Q.result.king || Q.result.rank === 1) confetti(innerWidth / 2, innerHeight / 3);
+}
+
+function viewQuiz() {
+  const Q = ui.quiz;
+  if (!Q) return `<div class="pad"><div class="empty"><b>Pas de partie en cours</b><p>Lance un quiz depuis l’onglet Amis → Jeux.</p><a class="btn primary" href="#/amis" data-act="go-games">Aller aux jeux</a></div></div>`;
+  const steps = `<div class="quiz-steps">${Array.from({ length: Q.total || 10 }, (_, i) =>
+    `<i class="${Q.answers?.[i] === true ? 'ok' : Q.answers?.[i] === false ? 'ko' : i === Q.i && Q.q ? 'cur' : ''}"></i>`).join('')}</div>`;
+  const top = `<header class="quiz-top">
+      <button class="iconbtn" data-act="quiz-quit" aria-label="Quitter le quiz">✕</button>
+      <b class="min0 quiz-name">${esc(Q.title || 'Quiz')}</b>
+      <span class="quiz-score">${fmtPts(Q.score || 0)}</span>
+    </header>${steps}`;
+  if (Q.result) {
+    const R = Q.result, perfect = R.correct === Q.total;
+    const msg = perfect ? 'Sans-faute ! 🔥' : R.correct >= Q.total * 0.7 ? 'Bien joué ! 👏' : R.correct >= Q.total * 0.4 ? 'Pas mal ! 🙂' : 'Aïe… revanche ? 😅';
+    const extra = Q.body.mode === 'daily'
+      ? `Tu es <b>${R.rank === 1 ? '1ᵉʳ 🥇' : R.rank + 'ᵉ'}</b> sur ${R.players} aujourd’hui.`
+      : R.king ? '👑 Tu es le meilleur de ta bande sur ce quiz !' : R.record ? 'Nouveau record perso !' : R.prev ? `Ton record reste ${fmtPts(R.prev)}.` : '';
+    return `<div class="pad quiz">${top}
+      <div class="quiz-result">
+        <div class="quiz-big">${R.correct}<small>/${Q.total}</small></div>
+        <h2>${msg}</h2>
+        <p class="quiz-total">${fmtPts(R.score)}</p>
+        ${extra ? `<p class="muted">${extra}</p>` : ''}
+        <div class="quiz-end">
+          ${Q.body.mode === 'free' ? `<button class="btn primary" data-act="quiz-again">Rejouer</button><a class="btn" href="#/${Q.body.kind}/${Q.body.id}">Voir la fiche</a>` : ''}
+          <a class="btn ${Q.body.mode === 'daily' ? 'primary' : ''}" href="#/amis" data-act="go-games">Classement</a>
+        </div>
+      </div></div>`;
+  }
+  if (!Q.q) return `<div class="pad quiz">${top}${spinner('Préparation des questions…')}</div>`;
+  const left = Math.max(0, Q.deadline - Date.now());
+  const withImg = Q.q.c.some(c => c.img !== undefined);
+  const answered = Q.res, a = Q.res?.a;
+  return `<div class="pad quiz">${top}
+    <div class="quiz-timer ${answered || Q.picked !== null ? 'stop' : ''}"><i style="--from:${(left / Q.limit).toFixed(3)};animation-duration:${left}ms"></i></div>
+    <div class="quiz-body">
+      ${Q.q.img ? `<div class="quiz-img ${Q.q.imgKind}"><img src="${IMG}${Q.q.imgKind === 'backdrop' ? 'w780' : 'w342'}${esc(Q.q.img)}" alt=""></div>` : ''}
+      <h2 class="quiz-q">${esc(Q.q.t)}</h2>
+      <div class="quiz-choices ${withImg ? 'faces' : ''}">${Q.q.c.map((c, i) => {
+        const cls = answered ? (i === a ? 'right' : i === Q.picked ? 'wrong' : 'dim') : i === Q.picked ? 'picked' : '';
+        return `<button class="quiz-c ${cls}" data-act="quiz-pick" data-c="${i}" ${Q.picked !== null ? 'disabled' : ''}>
+          ${withImg ? `<span class="quiz-face">${c.img ? `<img src="${IMG}w185${esc(c.img)}" alt="" loading="eager">` : esc(c.l.slice(0, 1))}</span>` : ''}<span>${esc(c.l)}</span></button>`;
+      }).join('')}</div>
+      <div class="quiz-feedback">${answered ? (Q.res.ok ? `<span class="quiz-gain">+${Q.res.pts}</span> Bonne réponse !` : Q.picked === -1 ? '⏱️ Trop tard !' : 'Raté !') : ''}</div>
+    </div></div>`;
 }
 
 /* ================= Suggestions des amis ================= */
@@ -1565,6 +1742,7 @@ const NOTIF_TYPES = [
   ['recos', '💡 Conseils', 'quand un ami conseille une série ou un film'],
   ['replies', '💬 Réponses', 'quand quelqu’un répond à un de tes avis'],
   ['reactions', '😂 Réactions', 'quand quelqu’un réagit à ton activité'],
+  ['games', '🏆 Jeux', 'quand quelqu’un bat ton score à un quiz'],
 ];
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const b64uToBytes = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
@@ -1885,13 +2063,14 @@ function render() {
     case 'user': html = viewUser(r.args[0]); break;
     case 'decouvrir': html = viewDiscover(); break;
     case 'profil': html = viewProfile(); break;
+    case 'quiz': html = viewQuiz(); break;
     default: html = viewCollection();
   }
   main.innerHTML = html;
   cascadeLists();
   keepFlashes();
   if (focusId) document.getElementById(focusId)?.focus();
-  const tab = { tv: 'collection', ep: 'collection', movie: 'collection', user: 'amis' }[r.name] || r.name;
+  const tab = { tv: 'collection', ep: 'collection', movie: 'collection', user: 'amis', quiz: 'amis' }[r.name] || r.name;
   for (const a of tabbar.querySelectorAll('a')) {
     const on = a.dataset.tab === tab;
     if (on && !a.classList.contains('active') && tabbar.querySelector('a.active')) replay(a.querySelector('svg'), 'bounce');
@@ -1939,8 +2118,8 @@ addEventListener('hashchange', () => {
   scrollMemo[currentHash] = scrollY;
   // Plus profond (fiche, épisode) : glisse depuis la droite ; retour en arrière : depuis la gauche ; autre onglet : fondu.
   const part = h => h.split('/')[1] || 'collection';
-  const depth = h => ({ tv: 1, movie: 1, user: 1, ep: 2 })[part(h)] || 0;
-  const tabOf = h => ({ tv: 'collection', ep: 'collection', movie: 'collection', user: 'amis' })[part(h)] || part(h);
+  const depth = h => ({ tv: 1, movie: 1, user: 1, quiz: 1, ep: 2 })[part(h)] || 0;
+  const tabOf = h => ({ tv: 'collection', ep: 'collection', movie: 'collection', user: 'amis', quiz: 'amis' })[part(h)] || part(h);
   let move = depth(location.hash) - depth(currentHash);
   if (move < 0 && !depth(location.hash) && tabOf(location.hash) !== tabOf(currentHash)) move = 0;
   // Fiche série ouverte : saisons repliées, sauf en revenant d'un de ses épisodes.
@@ -2197,6 +2376,7 @@ const fail = err => toast(err.message || 'Une erreur est survenue.');
 const actions = {
   seg({ name, v }, el) {
     if (name === 'theme') return switchTheme(v, el);
+    if (name === 'rankTab') { ui.rankTab = v; return rerender(); }
     const from = Number(main.querySelector(`[data-tabs="${name}"]`)?.style.getPropertyValue('--i'));
     ui[name] = v;
     if (name === 'authMode') ui.authMsg = '';
@@ -2326,6 +2506,19 @@ const actions = {
     for (const b of box.querySelectorAll('.star-btn.on')) { b.style.animationDelay = (b.dataset.n - 1) * 45 + 'ms'; replay(b, 'pop'); }
   },
   /* ----- réponses aux avis ----- */
+  ['quiz-start']({ mode, kind, id }, el) {
+    el.disabled = true;
+    startQuiz(mode === 'daily' ? { mode } : { mode, kind, id: Number(id) });
+  },
+  ['quiz-pick']({ c }) { quizAnswer(Number(c)); },
+  ['quiz-again']() { startQuiz(ui.quiz.body); },
+  async ['quiz-quit']() {
+    const Q = ui.quiz;
+    if (Q && !Q.result && Q.q && !await ask({ title: 'Quitter le quiz ?', text: Q.body.mode === 'daily' ? 'Le chrono continue : les questions non répondues compteront comme ratées.' : 'Ta partie s’arrête ici.', yes: 'Quitter', no: 'Continuer' })) return;
+    clearTimeout(quizTimer); ui.quiz = null;
+    ui.amisTab = 'games'; location.hash = '#/amis';
+  },
+  ['go-games']() { clearTimeout(quizTimer); ui.quiz = null; ui.amisTab = 'games'; location.hash = '#/amis'; },
   ['cal-jump']() {
     const line = document.querySelector('.nowline');
     if (line) scrollTo({ top: line.getBoundingClientRect().top + scrollY - 12, behavior: calm() ? 'auto' : 'smooth' });

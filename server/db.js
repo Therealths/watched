@@ -184,6 +184,31 @@ function openDb(dir) {
       at INTEGER NOT NULL,
       PRIMARY KEY (user_id, key)
     );
+    -- Jeux : le quiz du jour (le même pour tous) et les parties de chacun.
+    CREATE TABLE IF NOT EXISTS quiz_daily (
+      day TEXT PRIMARY KEY,
+      questions TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS quiz_runs (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      mode TEXT NOT NULL,                     -- 'daily' | 'free'
+      day TEXT NOT NULL,                      -- jour local de la partie (AAAA-MM-JJ)
+      kind TEXT,                              -- quiz libre : 'tv' | 'movie'
+      tid INTEGER,
+      questions TEXT,                         -- quiz libre : ses questions (le quiz du jour est dans quiz_daily)
+      answers TEXT NOT NULL DEFAULT '[]',
+      served_at INTEGER,                      -- quand la question en cours a été montrée (chrono côté serveur)
+      score INTEGER NOT NULL DEFAULT 0,
+      correct INTEGER NOT NULL DEFAULT 0,
+      total INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      finished_at INTEGER
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS quiz_one_daily ON quiz_runs (user_id, day) WHERE mode = 'daily';
+    CREATE INDEX IF NOT EXISTS quiz_runs_by_title ON quiz_runs (kind, tid, finished_at);
+    CREATE INDEX IF NOT EXISTS quiz_runs_by_user ON quiz_runs (user_id, finished_at);
     -- Photos de profil (petites images envoyées par l'appli, déjà réduites).
     CREATE TABLE IF NOT EXISTS avatar_photos (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
