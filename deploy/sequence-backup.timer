@@ -1,0 +1,10 @@
+# Chaque nuit à 4 h (ou au prochain démarrage si le PC était éteint).
+[Unit]
+Description=Sauvegarde nocturne what2watch
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

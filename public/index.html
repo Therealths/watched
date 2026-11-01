@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>what2watch</title>
+<meta name="description" content="Suivi des séries et films, entre amis.">
+<meta name="theme-color" content="#0F1116">
+<script>
+  // Applique le thème choisi dans le Profil avant l'affichage (évite un flash de l'autre thème).
+  try { const t = localStorage.getItem('w2w.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="what2watch">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg?v=2" type="image/svg+xml">
+<link rel="icon" href="icons/icon-192.png?v=2" type="image/png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png?v=2">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://image.tmdb.org">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main id="app" aria-live="polite"></main>
+
+<nav id="tabbar" aria-label="Navigation principale">
+  <a href="#/suggestions" data-tab="suggestions">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.3 1.1 2.2h5c0-.9.4-1.6 1.1-2.2A6 6 0 0 0 12 3z"/></svg>
+    <span>Suggestions</span><b id="sugBadge" class="tabdot" hidden></b>
+  </a>
+  <a href="#/amis" data-tab="amis">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c1-3.5 3.5-5.5 6.5-5.5s5.5 2 6.5 5.5"/><circle cx="17" cy="9" r="2.8"/><path d="M16 14.6c2.6.2 4.5 2 5.3 5"/></svg>
+    <span>Amis</span>
+  </a>
+  <a href="#/decouvrir" data-tab="decouvrir">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <span>Découvrir</span>
+  </a>
+  <a href="#/collection" data-tab="collection">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="5" height="16" rx="1.5"/><rect x="10" y="4" width="5" height="16" rx="1.5"/><path d="m16.4 5.4 3.4-.9 3 14.8-3.4.9z"/></svg>
+    <span>Collection</span>
+  </a>
+  <a href="#/profil" data-tab="profil">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>
+    <span>Profil</span>
+  </a>
+</nav>
+
+<div id="toast" role="status" hidden></div>
+<dialog id="ask" aria-labelledby="ask-title"></dialog>
+<dialog id="crop" class="sheet" aria-labelledby="crop-title"></dialog>
+<dialog id="filters" class="sheet" aria-labelledby="filters-title"></dialog>
+<dialog id="grp" class="sheet" aria-labelledby="grp-title"></dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

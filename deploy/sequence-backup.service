@@ -1,0 +1,9 @@
+# Sauvegarde nocturne de what2watch (lancée par sequence-backup.timer).
+[Unit]
+Description=Sauvegarde what2watch
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Desktop/Claude/sequence
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/backup.js
+Nice=10

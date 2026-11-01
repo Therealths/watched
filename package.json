@@ -1,0 +1,9 @@
+{
+  "name": "sequence",
+  "private": true,
+  "description": "Suivi des séries et films, entre amis",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server/server.js"
+  },
+  "engines": { "node": ">=22.5" }
+}

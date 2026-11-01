@@ -1,0 +1,3 @@
+# Données et secrets : restent sur le PC
+data/
+.env

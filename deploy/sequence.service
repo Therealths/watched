@@ -1,0 +1,14 @@
+# Service systemd (utilisateur) : lance what2watch au démarrage du PC.
+# Installation : voir les commandes données par Claude.
+[Unit]
+Description=what2watch (suivi de séries entre amis)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/Desktop/Claude/sequence
+ExecStart=/usr/bin/node --disable-warning=ExperimentalWarning server/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
