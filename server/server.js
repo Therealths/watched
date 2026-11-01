@@ -334,7 +334,11 @@ route('GET', /^\/api\/me$/, async ({ user }) => {
   const admin = isAdmin(user);
   const ann = !admin && db.prepare(`SELECT id, title, text FROM announcements a WHERE active = 1 AND created_at > ?
     AND NOT EXISTS (SELECT 1 FROM announcement_seen WHERE ann_id = a.id AND user_id = ?)`).get(user.created_at, user.id);
-  return { user: { ...publicUser(user), admin: admin || undefined }, badges: { requests: 0, recos }, announcement: ann || null };
+  // Défis reçus pas encore relevés (pastille sur Amis et fenêtre à l'ouverture, même sans notifications).
+  const duels = db.prepare(`SELECT c.id, c.from_id, u.name, c.kind, c.tid, c.score, c.correct, c.total FROM quiz_challenges c
+    JOIN users u ON u.id = c.from_id WHERE c.to_id = ? AND c.done_at IS NULL ORDER BY c.created_at DESC LIMIT 10`).all(user.id)
+    .map(c => ({ id: c.id, from: c.name, title: brief(c.kind, c.tid).name, score: c.score, correct: c.correct, total: c.total }));
+  return { user: { ...publicUser(user), admin: admin || undefined }, badges: { requests: 0, recos, duels: duels.length }, announcement: ann || null, duels };
 });
 
 route('POST', /^\/api\/announcement\/(\d+)\/seen$/, async ({ user, match }) => {

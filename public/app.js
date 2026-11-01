@@ -131,7 +131,7 @@ async function refreshMe() {
     me = r.user; badges = r.badges;
     LS.set('sequence.me', me);
     updateBadge();
-    showAnnouncement(r.announcement);
+    showAnnouncement(r.announcement).then(() => showDuels(r.duels));
   } catch (e) { return; }
   pull();
 }
@@ -1619,7 +1619,10 @@ async function quizAnswer(c) {
     if (r.ok) replay(document.querySelector('.quiz-gain'), 'pop-in');
     quizTimer = setTimeout(() => {
       if (ui.quiz !== Q) return;
-      if (r.done) { Q.result = { ...r.result, correct: r.correct, score: r.score }; Q.q = null; rerender(); quizCelebrate(Q); invalidate('/api/games', '/api/feed'); }
+      if (r.done) {
+        Q.result = { ...r.result, correct: r.correct, score: r.score }; Q.q = null; rerender(); quizCelebrate(Q); invalidate('/api/games', '/api/feed');
+        if (Q.body.challenge) refreshMe();
+      }
       else quizNext().catch(fail);
     }, 1300);
   } catch (e) { fail(e); }
@@ -2255,6 +2258,35 @@ function updateBadge() {
   updateBadge.last = n;
   el.textContent = n > 9 ? '9+' : String(n);
   el.hidden = !n;
+  // Amis : défis à relever.
+  const d = badges.duels || 0, ad = document.getElementById('amisBadge');
+  if (d > (updateBadge.lastDuels || 0) && updateBadge.lastDuels !== undefined) replay(ad, 'pop');
+  updateBadge.lastDuels = d;
+  ad.textContent = d > 9 ? '9+' : String(d);
+  ad.hidden = !d;
+}
+
+// Défi reçu : une fenêtre à l'ouverture de l'appli, une seule fois par défi (la pastille reste jusqu'à ce qu'il soit relevé).
+async function showDuels(list) {
+  if (!me || !list?.length) return;
+  const key = 'w2w.duelsShown.' + me.id, shown = new Set(LS.get(key) || []);
+  const fresh = list.filter(c => !shown.has(c.id));
+  if (!fresh.length || showDuels.busy) return;
+  showDuels.busy = true;
+  try {
+    while (askEl.open) await new Promise(done => askEl.addEventListener('close', done, { once: true }));
+    if (location.hash === '#/quiz') return;
+    const c = fresh[0];
+    for (const x of fresh) shown.add(x.id);
+    LS.set(key, [...shown].slice(-50));
+    const more = fresh.length - 1;
+    const go = await ask({
+      title: `⚔️ ${c.from} te défie !`,
+      text: `Quiz ${c.title}\nScore à battre : ${c.correct}/${c.total} · ${fmtPts(c.score)}${more ? `\n\n+ ${more > 1 ? `${more} autres défis` : 'un autre défi'} t’attend${more > 1 ? 'ent' : ''} dans Amis → Jeux.` : ''}`,
+      yes: 'Relever le défi', no: 'Plus tard',
+    });
+    if (go) startQuiz({ mode: 'free', challenge: c.id });
+  } finally { showDuels.busy = false; }
 }
 async function markRecosSeen() {
   badges.recos = 0; updateBadge();
@@ -3065,7 +3097,7 @@ catchInvite();
 if (me) { loadLocal(); refreshMe(); updateBadge(); setTimeout(handleInvite, 300); }
 else {
   // Vérifie si une session existe déjà (cookie) avant d'afficher la connexion.
-  get('/api/me').then(r => { me = r.user; badges = r.badges; LS.set('sequence.me', me); loadLocal(); render(); updateBadge(); pull(); handleInvite(); showAnnouncement(r.announcement); }, () => {});
+  get('/api/me').then(r => { me = r.user; badges = r.badges; LS.set('sequence.me', me); loadLocal(); render(); updateBadge(); pull(); handleInvite(); showAnnouncement(r.announcement).then(() => showDuels(r.duels)); }, () => {});
 }
 render();
 if ('serviceWorker' in navigator) {
