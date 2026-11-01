@@ -1642,6 +1642,7 @@ function paintAnswer(Q) {
   const box = main.querySelector('.quiz-choices');
   if (!box) return rerender();
   main.querySelector('.quiz-timer')?.classList.add('stop');
+  main.querySelector('.quiz-img')?.classList.add('revealed');
   for (const b of box.querySelectorAll('.quiz-c')) {
     const i = Number(b.dataset.c);
     b.disabled = true;
@@ -1703,9 +1704,10 @@ function viewQuiz() {
   return `<div class="pad quiz">${top}
     <div class="quiz-timer ${answered || Q.picked !== null ? 'stop' : ''}"><i style="--from:${(left / Q.limit).toFixed(3)};animation-duration:${left}ms"></i></div>
     <div class="quiz-body ${enter ? 'enter' : ''}">
-      ${Q.q.img ? `<div class="quiz-img ${Q.q.imgKind}"><img src="${IMG}${Q.q.imgKind === 'backdrop' ? 'w780' : 'w342'}${esc(Q.q.img)}" alt=""></div>` : ''}
+      ${Q.q.img ? `<div class="quiz-img ${Q.q.imgKind} ${answered || Q.picked !== null ? 'revealed' : ''}" style="--from:${(left / Q.limit).toFixed(3)};--d:${left}ms"><img src="${IMG}${Q.q.imgKind === 'backdrop' ? 'w780' : 'w342'}${esc(Q.q.img)}" alt=""></div>` : ''}
       <h2 class="quiz-q">${esc(Q.q.t)}</h2>
-      <div class="quiz-choices ${withImg ? 'faces' : ''}">${Q.q.c.map((c, i) => {
+      ${Q.q.x ? `<blockquote class="quiz-x">${esc(Q.q.x)}</blockquote>` : ''}
+      <div class="quiz-choices ${withImg ? 'faces' : Q.q.c.length === 2 ? 'tf' : ''}">${Q.q.c.map((c, i) => {
         const cls = answered ? (i === a ? 'right' : i === Q.picked ? 'wrong' : 'dim') : i === Q.picked ? 'picked' : '';
         return `<button class="quiz-c ${cls}" data-act="quiz-pick" data-c="${i}" ${Q.picked !== null ? 'disabled' : ''}>
           ${withImg ? `<span class="quiz-face">${c.img ? `<img src="${IMG}w185${esc(c.img)}" alt="" loading="eager">` : esc(c.l.slice(0, 1))}</span>` : ''}<span>${esc(c.l)}</span></button>`;

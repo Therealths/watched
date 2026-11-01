@@ -962,7 +962,7 @@ route('POST', /^\/api\/quiz\/(\d+)\/next$/, async ({ user, match }) => {
   const qx = runQuestions(run)[i];
   let served = run.served_at;
   if (!served) { served = Date.now(); db.prepare('UPDATE quiz_runs SET served_at = ? WHERE id = ?').run(served, run.id); }
-  return { i, total: run.total, score: run.score, title: quizTitle(run), q: { t: qx.t, img: qx.img || null, imgKind: qx.imgKind || null, c: qx.c },
+  return { i, total: run.total, score: run.score, title: quizTitle(run), q: { t: qx.t, x: qx.x || null, img: qx.img || null, imgKind: qx.imgKind || null, c: qx.c },
     limit: QUIZ_LIMIT, left: Math.max(0, QUIZ_LIMIT - (Date.now() - served)) };
 });
 
