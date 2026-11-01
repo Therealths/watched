@@ -19,10 +19,8 @@ const CREATORS = ['Vince Gilligan', 'Dan Harmon', 'Shonda Rhimes', 'David Beniof
   'Dan Erickson', 'Charlie Brooker', 'Greg Daniels', 'Larry David', 'Matthew Weiner', 'David Simon', 'Aaron Sorkin', 'Matt Duffer',
   'Jenji Kohan', 'Alan Ball', 'Eric Kripke', 'Seth MacFarlane', 'Chuck Lorre', 'Bill Lawrence', 'Michael Schur', 'Baran bo Odar'];
 
-const code = (s, e) => `S${String(s).padStart(2, '0')} E${String(e).padStart(2, '0')}`;
 const dur = m => m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}` : `${m} min`;
 // « Épisode 5 », « Episode 5 » : pas un vrai titre.
-const realEpName = n => n && !/^(é|e)pisode\s*\d+$/i.test(n.trim());
 
 // Une question : 4 choix mélangés, l'index de la bonne réponse gardé à part.
 function q(text, right, wrongs, extra = {}) {
@@ -115,53 +113,25 @@ const gens = {
     return q(T.kind === 'tv' ? 'De quelle série vient cette image ?' : 'De quel film vient cette image ?', T.name,
       sample(others, 3).map(x => x.name), { img, imgKind: 'backdrop', kind: 'image' });
   },
-  episode(T) {
-    const named = T.eps.filter(e => realEpName(e.name));
-    if (named.length < 4) return null;
-    const e = pick(named);
-    const near = named.filter(x => x !== e && x.s === e.s);
-    const wrongs = (near.length >= 3 ? sample(near, 3) : sample(named.filter(x => x !== e), 3)).map(x => x.name);
-    return q(`Comment s’appelle l’épisode ${code(e.s, e.e)} de ${T.name} ?`, e.name, wrongs, { kind: 'episode', who: 'ep' + e.s + 'x' + e.e });
-  },
-  epSeason(T) {
-    const named = T.eps.filter(e => realEpName(e.name));
-    const seasons = uniq(T.eps.map(e => e.s)).sort((a, b) => a - b);
-    if (named.length < 2 || seasons.length < 2) return null;
-    const e = pick(named);
-    const all = uniq([...seasons, ...[1, 2, 3, 4, 5, 6]]).filter(s => s !== e.s);
-    const wrong = all.sort((a, b) => Math.abs(a - e.s) - Math.abs(b - e.s)).slice(0, 3);
-    const r = q(`Dans quelle saison de ${T.name} se trouve l’épisode « ${e.name} » ?`, `Saison ${e.s}`, wrong.map(s => `Saison ${s}`), { kind: 'epSeason', who: 'ep' + e.s + 'x' + e.e });
-    if (r) { const a = r.c[r.a].l; r.c.sort((x, b) => x.l.localeCompare(b.l, 'fr', { numeric: true })); r.a = r.c.findIndex(c => c.l === a); }
-    return r;
-  },
 };
 
 function createQuiz({ tmdb }) {
-  // Toutes les infos utiles d'un titre (cache TMDB de 6 h), avec les épisodes déjà vus pour les séries.
-  async function titleData(kind, id, watchedEps = []) {
+  // Toutes les infos utiles d'un titre (cache TMDB de 6 h).
+  async function titleData(kind, id) {
     const d = await tmdb(`/${kind}/${id}`, { append_to_response: kind === 'tv' ? 'aggregate_credits' : 'credits' }, 6 * 3600e3);
-    const T = { kind, id, d, name: d.name || d.title, year: (d.first_air_date || d.release_date || '').slice(0, 4), cast: castOf(d, kind), eps: [] };
-    if (kind === 'tv' && watchedEps.length) {
-      const seasons = uniq(watchedEps.map(w => w.s)).slice(-4);
-      for (const s of seasons) {
-        try {
-          const sd = await tmdb(`/tv/${id}/season/${s}`, {}, 6 * 3600e3);
-          for (const ep of sd.episodes || []) if (watchedEps.some(w => w.s === s && w.e === ep.episode_number)) T.eps.push({ s, e: ep.episode_number, name: ep.name });
-        } catch { /* saison introuvable : on fait sans */ }
-      }
-    }
+    const T = { kind, id, d, name: d.name || d.title, year: (d.first_air_date || d.release_date || '').slice(0, 4), cast: castOf(d, kind), };
     return T;
   }
 
   const strip = x => { const { kind, who, ...rest } = x; return rest; };
 
-  // Quiz libre sur un titre : 10 questions variées, sans spoiler (seulement les épisodes vus).
-  async function freeQuiz(kind, id, watchedEps) {
-    const T = await titleData(kind, id, watchedEps);
+  // Quiz libre sur un titre : 10 questions variées (pas de titres d'épisodes, impossibles à retenir).
+  async function freeQuiz(kind, id) {
+    const T = await titleData(kind, id);
     const plan = kind === 'tv'
-      ? ['actor', 'actor', 'actor', 'character', 'face', 'face', 'episode', 'episode', 'episode', 'epSeason', 'year', 'network', 'creator', 'seasons', 'character']
+      ? ['actor', 'actor', 'actor', 'character', 'face', 'face', 'face', 'actor', 'year', 'network', 'creator', 'seasons', 'character']
       : ['actor', 'actor', 'actor', 'character', 'character', 'face', 'face', 'year', 'director', 'runtime', 'actor', 'face'];
-    // Chaque personne ou épisode ne sert qu'une fois, et jamais deux fois la même question.
+    // Chaque personne ne sert qu'une fois, et jamais deux fois la même question.
     const out = [], usedWho = new Set(), usedText = new Set();
     for (let tries = 0; tries < 3 && out.length < 10; tries++) {
       for (const g of shuffle([...plan])) {

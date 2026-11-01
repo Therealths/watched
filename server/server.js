@@ -938,18 +938,15 @@ route('POST', /^\/api\/quiz\/start$/, async ({ user, body }) => {
   if (ch?.done_at) throw httpError(409, 'Tu as déjà relevé ce défi.');
   if (ch) { kind = ch.kind; id = ch.tid; }
   if (!kind) throw httpError(400, 'Type invalide.');
-  // Quiz libre : seulement sur ce qu'on a vu (et sur les épisodes vus, pour ne rien dévoiler).
-  // Pour un défi sur un titre pas vu : pas de question d'épisode du tout.
-  let eps = [];
+  // Quiz libre : seulement sur ce qu'on a vu (sauf pour relever un défi).
   if (kind === 'tv') {
-    eps = db.prepare('SELECT s, e FROM watched WHERE user_id = ? AND show_id = ? ORDER BY s, e').all(user.id, id).map(r => ({ s: r.s, e: r.e }));
-    if (!eps.length && !ch) throw httpError(403, 'Regarde au moins un épisode avant de jouer à ce quiz.');
+    if (!ch && !db.prepare('SELECT 1 FROM watched WHERE user_id = ? AND show_id = ?').get(user.id, id)) throw httpError(403, 'Regarde au moins un épisode avant de jouer à ce quiz.');
   } else if (!ch && !db.prepare(`SELECT 1 FROM user_movies WHERE user_id = ? AND movie_id = ? AND status = 'watched'`).get(user.id, id)) {
     throw httpError(403, 'Marque ce film comme vu avant de jouer à son quiz.');
   }
   rateLimit('quiz:' + user.id, 60, 3600e3);
   await ensureTitle(kind, id, META_MAX_AGE);
-  const { title, questions } = await quiz.freeQuiz(kind, id, eps);
+  const { title, questions } = await quiz.freeQuiz(kind, id);
   if (questions.length < 5) throw httpError(422, 'Pas assez d’infos sur ce titre pour en faire un quiz.');
   const { lastInsertRowid } = db.prepare(`INSERT INTO quiz_runs (user_id, mode, day, kind, tid, questions, total, created_at) VALUES (?, 'free', ?, ?, ?, ?, ?, ?)`)
     .run(user.id, day, kind, id, JSON.stringify(questions), questions.length, Date.now());
