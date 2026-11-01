@@ -2146,16 +2146,23 @@ function celebrate(before, after, s, sel) {
   return false;
 }
 
-// Ouverture de l'appli : le logo « joue » une fois, sans bloquer l'écran.
-// Pas après le rechargement d'une mise à jour, ni dans l'appli installée sur Android (le téléphone affiche déjà son logo).
+// Ouverture de l'appli : l'intro de la vidéo (logo, nom, slogan) joue une fois. Un tap la passe.
+// Pas après le rechargement d'une mise à jour.
 let afterUpdate = false;
 try { afterUpdate = sessionStorage.getItem('w2w.updated') === '1'; sessionStorage.removeItem('w2w.updated'); } catch (e) { /* stockage bloqué */ }
-const androidApp = /android/i.test(navigator.userAgent) && matchMedia('(display-mode: standalone)').matches;
-if (!calm() && !afterUpdate && !androidApp) {
+if (!calm() && !afterUpdate) {
   const sp = document.createElement('div');
-  sp.id = 'splash'; sp.innerHTML = LOGO;
+  sp.id = 'splash';
+  const pop = (txt, i, cls = '') => `<span class="sp-w ${cls}" style="--i:${i}">${txt}</span>`;
+  sp.innerHTML = `<i class="sp-blob b1"></i><i class="sp-blob b2"></i><i class="sp-blob b3"></i>
+    <div class="sp-in">${LOGO}
+      <div class="sp-name">${pop('what', 0)}${pop('2', 1, 'two')}${pop('watch', 2)}</div>
+      <div class="sp-tag">${'Tes séries. Tes films. Tes potes.'.split(' ').map((w, i) => pop(w, i, i % 2 ? 'hl' : '')).join(' ')}</div>
+    </div>`;
   document.body.append(sp);
-  setTimeout(() => sp.remove(), 1200);
+  const end = () => { sp.classList.add('out'); setTimeout(() => sp.remove(), 450); };
+  const timer = setTimeout(end, 2000);
+  sp.addEventListener('click', () => { clearTimeout(timer); end(); }, { once: true });
 }
 
 function render() {
