@@ -3119,6 +3119,17 @@ for (const t of ['pointerup', 'pointercancel', 'pointermove']) document.addEvent
   if (t !== 'pointermove' || Math.abs(ev.movementX) + Math.abs(ev.movementY) > 6) clearTimeout(pressTimer);
 });
 document.addEventListener('contextmenu', ev => { if (ev.target.closest('.rchip')) ev.preventDefault(); });
+// Quiz au doigt : la réponse part dès que le doigt se relève sur le bouton touché.
+// Safari sur iPhone ne déclenche pas toujours le « clic » qui suit (appui appuyé, animations en cours).
+let quizTouch = null;
+document.addEventListener('pointerdown', ev => {
+  quizTouch = ev.pointerType !== 'mouse' ? ev.target.closest('.quiz-c') : null;
+});
+document.addEventListener('pointerup', ev => {
+  const b = quizTouch; quizTouch = null;
+  if (b && !b.disabled && b === ev.target.closest('.quiz-c')) quizAnswer(Number(b.dataset.c));
+});
+document.addEventListener('pointercancel', () => { quizTouch = null; });
 // Un appui ailleurs referme le choix d'emoji.
 document.addEventListener('click', ev => {
   if (ui.reactOpen && !ev.target.closest('.reacts')) { ui.reactOpen = null; rerender(); }
