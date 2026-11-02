@@ -131,9 +131,22 @@ async function refreshMe() {
     me = r.user; badges = r.badges;
     LS.set('sequence.me', me);
     updateBadge();
-    showAnnouncement(r.announcement).then(() => showDuels(r.duels));
+    showAnnouncement(r.announcement).then(() => showDuels(r.duels)).then(askEmail);
   } catch (e) { return; }
   pull();
+}
+
+// Membre sans adresse mail : on la lui demande une fois (puis pas avant une semaine s'il répond « Plus tard »).
+const MAIL_LATER = 'w2w.mailLater';
+let mailAsked = false;
+async function askEmail() {
+  if (!me || me.email || mailAsked || askEl.open || (LS.get(MAIL_LATER) || 0) > Date.now()) return;
+  mailAsked = true;
+  const yes = await ask({ title: '📧 Ajoute ton adresse mail', text: EMAIL_WHY, yes: 'Ajouter mon adresse', no: 'Plus tard' });
+  if (!yes) return LS.set(MAIL_LATER, Date.now() + 7 * DAY_MS);
+  ui.profTab = 'settings';
+  if (location.hash !== '#/profil') location.hash = '#/profil'; else render();
+  setTimeout(() => { const i = document.getElementById('acc-mail'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus(); } }, 350);
 }
 
 // Message de l'administrateur : affiché une fois, puis marqué comme vu sur le compte.
@@ -380,8 +393,10 @@ const ui = {
 };
 
 /* ================= Vues : connexion ================= */
+const EMAIL_WHY = 'Seulement pour retrouver ton pseudo ou ton mot de passe si tu les perds. Personne d’autre ne la voit.';
 function viewAuth() {
   const reg = ui.authMode === 'register';
+  if (ui.authMode === 'forgot') return viewForgot();
   return `<div class="pad welcome">
     <div class="brand">${LOGO}<h1 class="wordmark">${WORDMARK}</h1></div>
     ${inviteCard() || installBlock()}
@@ -392,12 +407,36 @@ function viewAuth() {
         <div class="field"><label for="au-user">Pseudo</label>
           <input class="input" id="au-user" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div>
         ${reg ? `<div class="field"><label for="au-name">Nom affiché <span class="opt">(ce que tes amis verront)</span></label>
-          <input class="input" id="au-name" name="name" autocomplete="nickname" maxlength="40"></div>` : ''}
+          <input class="input" id="au-name" name="name" autocomplete="nickname" maxlength="40"></div>
+        <div class="field"><label for="au-mail">Adresse mail</label>
+          <input class="input" id="au-mail" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" required>
+          <p class="muted small field-help">🔒 ${EMAIL_WHY}</p></div>` : ''}
         <div class="field"><label for="au-pass">Mot de passe${reg ? ' <span class="opt">(8 caractères minimum)</span>' : ''}</label>
           <input class="input" id="au-pass" name="password" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required></div>
         ${ui.authMsg ? `<div class="err">${esc(ui.authMsg)}</div>` : ''}
         <button class="btn primary" type="submit">${reg ? 'Créer mon compte' : 'Me connecter'}</button>
+        ${reg ? '' : `<button type="button" class="linkbtn forgot-link" data-act="forgot">Pseudo ou mot de passe oublié ?</button>`}
       </form>
+    </div>
+  </div>`;
+}
+
+// Identifiants oubliés : la demande part chez l'administrateur, qui recontacte la personne.
+function viewForgot() {
+  return `<div class="pad welcome">
+    <div class="brand">${LOGO}<h1 class="wordmark">${WORDMARK}</h1></div>
+    <div class="panel">
+      <h2 class="forgot-title">Pseudo ou mot de passe oublié</h2>
+      ${ui.forgotSent ? `<p>✅ Demande envoyée. L’administrateur de l’appli va te recontacter avec ton pseudo et un mot de passe provisoire, que tu pourras changer ensuite dans Profil.</p>
+        <p class="muted small">Si tu n’avais pas enregistré d’adresse mail, contacte-le directement.</p>`
+      : `<p class="muted">Entre l’adresse mail de ton compte. L’administrateur de l’appli recevra ta demande et te recontactera.</p>
+      <form id="forgotForm" class="form" novalidate>
+        <div class="field"><label for="fg-mail">Adresse mail</label>
+          <input class="input" id="fg-mail" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" required></div>
+        ${ui.authMsg ? `<div class="err">${esc(ui.authMsg)}</div>` : ''}
+        <button class="btn primary" type="submit">Envoyer la demande</button>
+      </form>`}
+      <button type="button" class="linkbtn forgot-link" data-act="forgot-back">← Retour à la connexion</button>
     </div>
   </div>`;
 }
@@ -436,10 +475,11 @@ async function submitAuth(form) {
     refreshMe();
   } catch (e) {
     ui.authMsg = e.message;
-    const keep = { u: form.elements.username.value, n: form.elements.name?.value };
+    const keep = { u: form.elements.username.value, n: form.elements.name?.value, m: form.elements.email?.value };
     render();
     document.getElementById('au-user').value = keep.u;
     if (keep.n != null && document.getElementById('au-name')) document.getElementById('au-name').value = keep.n;
+    if (keep.m != null && document.getElementById('au-mail')) document.getElementById('au-mail').value = keep.m;
   }
 }
 
@@ -1842,6 +1882,7 @@ function adminHTML() {
         <button class="btn small danger" data-act="ann-remove">${ui.confirm === 'ann-remove' ? 'Sûr ? Retirer' : 'Retirer'}</button></div>
     </div>` : '';
   return `<h2>Admin</h2>
+    ${adminAccountsHTML()}
     <form class="panel" id="annForm">
       <p class="muted small">Ce message s’affiche une seule fois, à la prochaine ouverture de l’appli, chez tous les membres déjà inscrits. Un nouveau message remplace l’ancien.</p>
       <div class="field"><label for="ann-title">Titre</label><input class="input" id="ann-title" name="title" maxlength="80" required></div>
@@ -1849,6 +1890,27 @@ function adminHTML() {
       <div class="row"><button class="btn small primary" type="submit">Envoyer à tout le monde</button></div>
     </form>
     ${cur}`;
+}
+
+// Identifiants oubliés : les demandes reçues, puis tous les membres (avec leur adresse) pour un nouveau mot de passe.
+function adminAccountsHTML() {
+  const r = useData('/api/admin/accounts', 30e3);
+  if (!r.data) return r.loading ? spinner() : '';
+  const { requests, members } = r.data, byId = Object.fromEntries(members.map(m => [m.id, m]));
+  const resetBtn = m => `<button class="btn small" data-act="admin-reset" data-id="${m.id}" data-name="${esc(m.name)}">🔑 Nouveau mot de passe</button>`;
+  const who = m => `${avatar(m, 'sm')}<span class="min0 grow"><b>${esc(m.name)}</b> <span class="muted small">@${esc(m.username)}</span>
+    <span class="muted small acc-mail">${m.email ? esc(m.email) : 'pas d’adresse mail'}</span></span>`;
+  const reqs = requests.map(q => `<div class="panel acc-req">
+      <div class="muted small">🔑 Demande du ${esc(new Date(q.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }))} · <b>${esc(q.email)}</b></div>
+      ${q.users.length ? q.users.map(id => `<div class="acc-row">${who(byId[id])}${resetBtn(byId[id])}</div>`).join('')
+        : '<p class="muted small">Aucun compte avec cette adresse. Si tu sais de qui il s’agit, retrouve-le dans la liste des membres ci-dessous.</p>'}
+      <div class="row"><button class="btn small" data-act="admin-dismiss" data-id="${q.id}">Ignorer la demande</button></div>
+    </div>`).join('');
+  const open = !!ui.expanded.adminMembers, noMail = members.filter(m => !m.email).length;
+  return `${reqs}
+    <button type="button" class="panel duels-toggle acc-toggle ${open ? 'is-open' : ''}" data-act="expand" data-key="adminMembers" aria-expanded="${open}">
+      <span class="min0 grow"><b>👥 Membres et identifiants</b> <span class="muted small">${members.length} membres${noMail ? ` · ${noMail} sans adresse mail` : ''}</span></span>${ICON.chevron}</button>
+    ${open ? `<div class="panel acc-list">${members.map(m => `<div class="acc-row">${who(m)}${resetBtn(m)}</div>`).join('')}</div>` : ''}`;
 }
 
 /* ----- notifications sur le téléphone ----- */
@@ -1976,6 +2038,11 @@ function viewProfile() {
     <form class="panel" id="nameForm">
       <div class="field"><label for="acc-name">Nom affiché <span class="opt">(ton pseudo de connexion reste @${esc(me.username)})</span></label><input class="input" id="acc-name" name="name" maxlength="40" value="${esc(me.name)}"></div>
       <div class="row"><button class="btn small" type="submit">Enregistrer le nom</button></div>
+    </form>
+    <form class="panel gap-top" id="mailForm">
+      <div class="field"><label for="acc-mail">Adresse mail</label><input class="input" id="acc-mail" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" value="${esc(me.email || '')}" placeholder="ton@adresse.fr">
+        <p class="muted small field-help">🔒 ${EMAIL_WHY}</p></div>
+      <div class="row"><button class="btn small" type="submit">Enregistrer l’adresse</button></div>
     </form>
     <form class="panel gap-top" id="passForm">
       <div class="field"><label for="acc-cur">Mot de passe actuel</label><input class="input" id="acc-cur" name="current" type="password" autocomplete="current-password"></div>
@@ -2980,6 +3047,20 @@ const actions = {
     location.hash = '#/collection';
     render();
   },
+  forgot() { ui.authMode = 'forgot'; ui.authMsg = ''; ui.forgotSent = false; render(); },
+  ['forgot-back']() { ui.authMode = 'login'; ui.authMsg = ''; render(); },
+  async ['admin-reset']({ id, name }, el) {
+    if (!await ask({ title: `Nouveau mot de passe pour ${name} ?`, text: 'Son mot de passe actuel ne marchera plus et ses appareils seront déconnectés. Tu verras le nouveau mot de passe provisoire pour le lui transmettre.', yes: 'Créer le mot de passe', no: 'Annuler' })) return;
+    el.disabled = true;
+    try {
+      const r = await post('/api/admin/reset', { userId: Number(id) });
+      invalidate('/api/admin/accounts'); rerender();
+      await ask({ title: `Identifiants de ${r.name}`, text: `Pseudo : ${r.username}\nMot de passe provisoire : ${r.password}\n\nEnvoie-les-lui${r.email ? ` (${r.email})` : ''}. Il pourra changer le mot de passe dans Profil → Mon compte.`, yes: 'C’est noté' });
+    } catch (e) { fail(e); el.disabled = false; }
+  },
+  async ['admin-dismiss']({ id }) {
+    try { await post(`/api/admin/reset/${id}/dismiss`, {}); invalidate('/api/admin/accounts'); rerender(); } catch (e) { fail(e); }
+  },
   async ['ann-remove']() {
     if (ui.confirm !== 'ann-remove') { armConfirm('ann-remove'); return rerender(); }
     ui.confirm = null;
@@ -3090,6 +3171,22 @@ document.addEventListener('submit', async ev => {
     } catch (e) { fail(e); }
     document.activeElement?.blur(); rerender();
   }
+  if (f.id === 'forgotForm') {
+    ui.authMsg = '';
+    try { await post('/api/forgot', { email: f.elements.email.value }); ui.forgotSent = true; }
+    catch (e) { ui.authMsg = e.message; }
+    const keep = f.elements.email.value;
+    render();
+    const inp = document.getElementById('fg-mail'); if (inp) inp.value = keep;
+  }
+  if (f.id === 'mailForm') {
+    try {
+      const r = await post('/api/me/email', { email: f.elements.email.value });
+      me = { ...me, email: r.user.email }; LS.set('sequence.me', me);
+      ui.accountMsg = r.user.email ? '✓ Adresse mail enregistrée.' : '✓ Adresse mail retirée.';
+    } catch (e) { ui.accountMsg = e.message; }
+    document.activeElement?.blur(); rerender();
+  }
   if (f.id === 'passForm') {
     try {
       await post('/api/me/password', { current: f.elements.current.value, next: f.elements.next.value });
@@ -3115,7 +3212,7 @@ catchInvite();
 if (me) { loadLocal(); refreshMe(); updateBadge(); setTimeout(handleInvite, 300); }
 else {
   // Vérifie si une session existe déjà (cookie) avant d'afficher la connexion.
-  get('/api/me').then(r => { me = r.user; badges = r.badges; LS.set('sequence.me', me); loadLocal(); render(); updateBadge(); pull(); handleInvite(); showAnnouncement(r.announcement).then(() => showDuels(r.duels)); }, () => {});
+  get('/api/me').then(r => { me = r.user; badges = r.badges; LS.set('sequence.me', me); loadLocal(); render(); updateBadge(); pull(); handleInvite(); showAnnouncement(r.announcement).then(() => showDuels(r.duels)).then(askEmail); }, () => {});
 }
 render();
 if ('serviceWorker' in navigator) {

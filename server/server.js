@@ -155,7 +155,7 @@ function readSid(req) {
 function sessionUser(req) {
   const sid = readSid(req);
   if (!sid) return null;
-  const row = db.prepare(`SELECT s.token, s.seen_at, u.id, u.username, u.name, u.avatar, u.created_at FROM sessions s
+  const row = db.prepare(`SELECT s.token, s.seen_at, u.id, u.username, u.name, u.avatar, u.email, u.created_at FROM sessions s
     JOIN users u ON u.id = s.user_id WHERE s.token = ?`).get(sha256(sid));
   if (!row) return null;
   if (Date.now() - row.seen_at > SESSION_MAX_AGE) {
@@ -163,7 +163,7 @@ function sessionUser(req) {
     return null;
   }
   if (Date.now() - row.seen_at > DAY) db.prepare('UPDATE sessions SET seen_at = ? WHERE token = ?').run(Date.now(), row.token);
-  return { id: row.id, username: row.username, name: row.name, avatar: row.avatar, created_at: row.created_at, token: row.token };
+  return { id: row.id, username: row.username, name: row.name, avatar: row.avatar, email: row.email, created_at: row.created_at, token: row.token };
 }
 
 // Limite les tentatives (connexion, inscription) par adresse IP.
@@ -294,6 +294,14 @@ function checkNameFree(name, exceptId = 0) {
   if (taken) throw httpError(409, `Le nom « ${name} » est déjà pris par un autre membre. Choisis-en un autre (ajoute ton nom de famille, une initiale…).`);
 }
 
+const EMAIL_RE = /^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/;
+function cleanEmail(v, required) {
+  const email = String(v || '').trim().toLowerCase();
+  if (!email && !required) return null;
+  if (email.length > 120 || !EMAIL_RE.test(email)) throw httpError(400, 'Adresse mail invalide.');
+  return email;
+}
+
 route('POST', /^\/api\/register$/, async ({ req, res, body }) => {
   rateLimit('reg:' + clientIp(req), 10, 3600e3);
   const username = String(body.username || '').trim().toLowerCase();
@@ -301,15 +309,16 @@ route('POST', /^\/api\/register$/, async ({ req, res, body }) => {
   const password = String(body.password || '');
   if (!USERNAME_RE.test(username)) throw httpError(400, 'Pseudo : 3 à 20 caractères, lettres minuscules, chiffres, point, tiret ou _.');
   if (password.length < 8) throw httpError(400, 'Le mot de passe doit faire au moins 8 caractères.');
+  const email = cleanEmail(body.email, true);
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) throw httpError(409, 'Ce pseudo est déjà pris.');
   checkNameFree(name);
-  const { lastInsertRowid } = db.prepare('INSERT INTO users (username, name, pass, created_at) VALUES (?, ?, ?, ?)')
-    .run(username, name, hashPassword(password), Date.now());
+  const { lastInsertRowid } = db.prepare('INSERT INTO users (username, name, pass, email, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(username, name, hashPassword(password), email, Date.now());
   // Inscription depuis un lien d'invitation : on entre directement dans le groupe.
   const g = body.invite && groupByInvite(String(body.invite));
   if (g) joinGroup(g.id, Number(lastInsertRowid));
   createSession(res, req, Number(lastInsertRowid));
-  return { user: { id: Number(lastInsertRowid), username, name } };
+  return { user: { id: Number(lastInsertRowid), username, name, email } };
 }, { auth: false });
 
 route('POST', /^\/api\/login$/, async ({ req, res, body }) => {
@@ -318,7 +327,20 @@ route('POST', /^\/api\/login$/, async ({ req, res, body }) => {
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (!u || !checkPassword(String(body.password || ''), u.pass)) throw httpError(401, 'Pseudo ou mot de passe incorrect.');
   createSession(res, req, u.id);
-  return { user: publicUser(u) };
+  return { user: { ...publicUser(u), email: u.email || null } };
+}, { auth: false });
+
+// Pseudo ou mot de passe oublié : la demande arrive chez l'administrateur, qui donne un mot de passe provisoire.
+// Même réponse que l'adresse soit connue ou non (on ne révèle pas qui est inscrit).
+route('POST', /^\/api\/forgot$/, async ({ req, body }) => {
+  rateLimit('forgot:' + clientIp(req), 5, 3600e3);
+  const email = cleanEmail(body.email, true);
+  if (!db.prepare('SELECT 1 FROM reset_requests WHERE email = ? AND done_at IS NULL').get(email)) {
+    db.prepare('INSERT INTO reset_requests (email, at) VALUES (?, ?)').run(email, Date.now());
+    const admin = db.prepare('SELECT MIN(id) id FROM users').get().id;
+    notify(admin, null, null, { title: '🔑 Identifiants oubliés', body: `Quelqu’un (${email}) demande de l’aide pour se reconnecter.`, url: '#/profil', tag: 'forgot' });
+  }
+  return { ok: true };
 }, { auth: false });
 
 route('POST', /^\/api\/logout$/, async ({ req, res, user }) => {
@@ -338,7 +360,7 @@ route('GET', /^\/api\/me$/, async ({ user }) => {
   const duels = db.prepare(`SELECT c.id, c.from_id, u.name, c.kind, c.tid, c.score, c.correct, c.total FROM quiz_challenges c
     JOIN users u ON u.id = c.from_id WHERE c.to_id = ? AND c.done_at IS NULL ORDER BY c.created_at DESC LIMIT 10`).all(user.id)
     .map(c => ({ id: c.id, from: c.name, title: brief(c.kind, c.tid).name, score: c.score, correct: c.correct, total: c.total }));
-  return { user: { ...publicUser(user), admin: admin || undefined }, badges: { requests: 0, recos, duels: duels.length }, announcement: ann || null, duels };
+  return { user: { ...publicUser(user), email: user.email || null, admin: admin || undefined }, badges: { requests: 0, recos, duels: duels.length }, announcement: ann || null, duels };
 });
 
 route('POST', /^\/api\/announcement\/(\d+)\/seen$/, async ({ user, match }) => {
@@ -365,6 +387,31 @@ route('POST', /^\/api\/admin\/announcement$/, async ({ user, body }) => {
   db.prepare('INSERT INTO announcements (title, text, created_at) VALUES (?, ?, ?)').run(title, text, Date.now());
   return currentAnnouncement();
 });
+// Identifiants oubliés : demandes en attente (avec les comptes liés à l'adresse) et tous les membres.
+route('GET', /^\/api\/admin\/accounts$/, async ({ user }) => {
+  adminOnly(user);
+  const members = db.prepare('SELECT id, username, name, email, avatar FROM users ORDER BY name COLLATE NOCASE').all();
+  const requests = db.prepare('SELECT id, email, at FROM reset_requests WHERE done_at IS NULL ORDER BY at DESC').all()
+    .map(r => ({ ...r, users: members.filter(m => m.email === r.email).map(m => m.id) }));
+  return { requests, members };
+});
+route('POST', /^\/api\/admin\/reset$/, async ({ user, body }) => {
+  adminOnly(user);
+  const target = db.prepare('SELECT id, username, name, email FROM users WHERE id = ?').get(int(body.userId, 'userId'));
+  if (!target) throw httpError(404, 'Membre introuvable.');
+  // Mot de passe provisoire facile à dicter : sans 0/O ni 1/l.
+  const abc = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const temp = Array.from(crypto.randomBytes(10), b => abc[b % abc.length]).join('');
+  db.prepare('UPDATE users SET pass = ? WHERE id = ?').run(hashPassword(temp), target.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(target.id);
+  if (target.email) db.prepare('UPDATE reset_requests SET done_at = ? WHERE email = ? AND done_at IS NULL').run(Date.now(), target.email);
+  return { username: target.username, name: target.name, email: target.email, password: temp };
+});
+route('POST', /^\/api\/admin\/reset\/(\d+)\/dismiss$/, async ({ user, match }) => {
+  adminOnly(user);
+  db.prepare('UPDATE reset_requests SET done_at = ? WHERE id = ?').run(Date.now(), Number(match[1]));
+  return { ok: true };
+});
 route('POST', /^\/api\/admin\/announcement\/remove$/, async ({ user }) => {
   adminOnly(user);
   db.prepare('UPDATE announcements SET active = 0').run();
@@ -376,7 +423,13 @@ route('POST', /^\/api\/me$/, async ({ user, body }) => {
   if (!name) throw httpError(400, 'Le nom ne peut pas être vide.');
   checkNameFree(name, user.id);
   db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, user.id);
-  return { user: { ...publicUser(user), name } };
+  return { user: { ...publicUser(user), email: user.email || null, name } };
+});
+
+route('POST', /^\/api\/me\/email$/, async ({ user, body }) => {
+  const email = cleanEmail(body.email, false);
+  db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email, user.id);
+  return { user: { ...publicUser(user), email } };
 });
 
 /* ----- avatar ----- */

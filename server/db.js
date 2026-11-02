@@ -237,6 +237,14 @@ function openDb(dir) {
   `);
   // Avatar : null (initiale), 'e<n>' (avatar prédéfini n) ou 'p<horodatage>' (photo, l'horodatage sert de version).
   if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'avatar'").get()) db.exec('ALTER TABLE users ADD COLUMN avatar TEXT');
+  // Adresse mail : seulement pour retrouver son pseudo ou son mot de passe (jamais montrée aux autres membres).
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'email'").get()) db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  db.exec(`CREATE TABLE IF NOT EXISTS reset_requests (
+      id INTEGER PRIMARY KEY,
+      email TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      done_at INTEGER
+    )`);
   // Arrivée des groupes : tous les membres déjà inscrits forment un premier groupe, pour que leur fil ne change pas.
   if (!db.prepare("SELECT 1 FROM app_meta WHERE k = 'groups_init'").get()) {
     const first = db.prepare('SELECT MIN(id) id FROM users').get().id;
