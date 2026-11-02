@@ -1033,3 +1033,8 @@ body.focus-mode #app { padding-bottom: 0; }
 .mail-invite-form { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .mail-invite-form .row { margin-top: 0; }
 .mail-invite .push-bell { animation: none; }
+
+/* iPhone : un champ écrit en moins de 16 px fait zoomer l'écran au toucher, et l'appli reste agrandie (elle glisse de côté). */
+@supports (-webkit-touch-callout: none) {
+  input, textarea, select, .input, .reply-box textarea { font-size: 16px !important; }
+}
