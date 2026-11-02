@@ -1029,3 +1029,6 @@ body.focus-mode #app { padding-bottom: 0; }
 .acc-mail { display: block; overflow-wrap: anywhere; }
 .panel.acc-toggle { display: flex; flex-direction: row; width: 100%; align-items: center; gap: 10px; margin-bottom: 12px; }
 .acc-list { margin: -4px 0 12px; }
+.mail-invite-form { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.mail-invite-form .row { margin-top: 0; }
+.mail-invite .push-bell { animation: none; }

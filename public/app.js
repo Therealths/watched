@@ -140,7 +140,7 @@ async function refreshMe() {
 const MAIL_LATER = 'w2w.mailLater';
 let mailAsked = false;
 async function askEmail() {
-  if (!me || me.email || mailAsked || askEl.open || (LS.get(MAIL_LATER) || 0) > Date.now()) return;
+  if (!me || me.email || mailAsked || askEl.open || (LS.get(MAIL_LATER) || 0) > Date.now() || location.hash.startsWith('#/collection') && mailInviteHTML()) return;
   mailAsked = true;
   const yes = await ask({ title: '📧 Ajoute ton adresse mail', text: EMAIL_WHY, yes: 'Ajouter mon adresse', no: 'Plus tard' });
   if (!yes) return LS.set(MAIL_LATER, Date.now() + 7 * DAY_MS);
@@ -501,7 +501,7 @@ function viewCollection() {
   const nTv = Object.keys(state.shows).length, nMv = Object.keys(state.movies).length;
   return `<div class="pad">
     <header class="top"><h1>Collection</h1></header>
-    ${pushInviteHTML()}
+    ${mailInviteHTML() || pushInviteHTML()}
     ${tabs('collTab', ui.collTab, [['tv', `Séries · ${nTv}`], ['movie', `Films · ${nMv}`]])}
     <div class="subseg">${ui.collTab === 'movie' ? filmsBody() : seriesBody()}</div>
   </div>`;
@@ -1957,6 +1957,23 @@ function canAskPush() {
   return ui.pushOn === false;
 }
 const PUSH_LATER = 'sequence.pushLater';
+// Encart pour ceux qui n'ont pas encore donné d'adresse mail (remplace celui des notifications tant qu'il est là).
+const MAIL_BANNER_LATER = 'w2w.mailBannerLater';
+function mailInviteHTML() {
+  if (!me || me.email || Date.now() < (LS.get(MAIL_BANNER_LATER) || 0)) return '';
+  return `<div class="push-invite mail-invite">
+    <span class="push-bell" aria-hidden="true">📧</span>
+    <div class="min0"><b>Ajoute ton adresse mail</b>
+      <div class="muted small">Elle sert uniquement si tu perds ton pseudo ou ton mot de passe : l’administrateur pourra te retrouver et te redonner l’accès à ton compte. Personne d’autre ne la voit, et tu ne recevras aucun e-mail.</div>
+      <form id="mailInviteForm" class="mail-invite-form" novalidate>
+        <input class="input" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" placeholder="ton@adresse.fr" aria-label="Adresse mail" required>
+        ${ui.mailInviteMsg ? `<div class="err small">${esc(ui.mailInviteMsg)}</div>` : ''}
+        <div class="row"><button class="btn small primary" type="submit">Enregistrer</button><button type="button" class="btn small" data-act="mail-later">Plus tard</button></div>
+      </form>
+    </div>
+  </div>`;
+}
+
 function pushInviteHTML() {
   if (!canAskPush() || Date.now() < (LS.get(PUSH_LATER) || 0)) return '';
   return `<div class="push-invite">
@@ -3048,6 +3065,10 @@ const actions = {
     render();
   },
   forgot() { ui.authMode = 'forgot'; ui.authMsg = ''; ui.forgotSent = false; render(); },
+  ['mail-later']() {
+    LS.set(MAIL_BANNER_LATER, Date.now() + 3 * DAY_MS);
+    collapse(document.querySelector('.mail-invite')).then(rerender);
+  },
   ['forgot-back']() { ui.authMode = 'login'; ui.authMsg = ''; render(); },
   async ['admin-reset']({ id, name }, el) {
     if (!await ask({ title: `Nouveau mot de passe pour ${name} ?`, text: 'Son mot de passe actuel ne marchera plus et ses appareils seront déconnectés. Tu verras le nouveau mot de passe provisoire pour le lui transmettre.', yes: 'Créer le mot de passe', no: 'Annuler' })) return;
@@ -3178,6 +3199,22 @@ document.addEventListener('submit', async ev => {
     const keep = f.elements.email.value;
     render();
     const inp = document.getElementById('fg-mail'); if (inp) inp.value = keep;
+  }
+  if (f.id === 'mailInviteForm') {
+    const val = f.elements.email.value;
+    try {
+      const r = await post('/api/me/email', { email: val });
+      if (!r.user.email) throw new Error('Entre ton adresse mail.');
+      me = { ...me, email: r.user.email }; LS.set('sequence.me', me);
+      ui.mailInviteMsg = '';
+      document.activeElement?.blur();
+      toast('✓ Adresse mail enregistrée, merci !');
+      await collapse(f.closest('.mail-invite'));
+      rerender();
+    } catch (e) {
+      ui.mailInviteMsg = e.message; rerender();
+      const i = document.querySelector('#mailInviteForm input'); if (i) i.value = val;
+    }
   }
   if (f.id === 'mailForm') {
     try {
