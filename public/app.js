@@ -723,9 +723,20 @@ function rail(r, type) {
 }
 
 // Affiche d'un résultat TMDB, avec la note du public et une coche si on l'a déjà.
+// Petit + sur l'affiche d'un titre pas encore ajouté : il s'ouvre sur « À voir » / « J'ai vu ».
+function tileAdd(type, id) {
+  if (isAdded(type, id)) return '';
+  const open = ui.addOpen === `${type}:${id}`;
+  return `<button class="tileplus ${open ? 'open' : ''}" data-act="quickadd" data-type="${type}" data-id="${id}" aria-expanded="${open}" aria-label="${open ? 'Fermer' : 'Ajouter'}">${ICON.plus}</button>
+    ${open ? `<span class="tilechoice addchoice" data-act="noop">
+      <button class="btn small" data-act="quickadd-as" data-type="${type}" data-id="${id}" data-st="watchlist">${ICON.bookmark} À voir</button>
+      <button class="btn small primary" data-act="quickadd-as" data-type="${type}" data-id="${id}" data-st="watched">${ICON.check} J’ai vu</button>
+    </span>` : ''}`;
+}
+
 function tmdbTile(x, type, withYear) {
   const title = x.name || x.title, year = (x.first_air_date || x.release_date || '').slice(0, 4);
-  return `<a class="tile" href="#/${type}/${x.id}"><div class="rel">${poster(x.poster_path, title)}${scoreBadge(x)}${isAdded(type, x.id) ? `<span class="badge">${ICON.check}</span>` : ''}</div>
+  return `<a class="tile" href="#/${type}/${x.id}"><div class="rel">${poster(x.poster_path, title)}${scoreBadge(x)}${isAdded(type, x.id) ? `<span class="badge">${ICON.check}</span>` : tileAdd(type, x.id)}</div>
     <div class="tile-name">${esc(title)}</div>${withYear && year ? `<div class="tile-sub">${esc(year)}</div>` : ''}</a>`;
 }
 
@@ -1823,7 +1834,7 @@ function sugTile(g) {
   const names = froms.length === 1 ? froms[0].name : `${froms[0].name} +${froms.length - 1}`;
   const added = isAdded(g.kind, t.id);
   return `<a class="tile sug ${g.unseen ? 'unseen' : ''}" href="#/${g.kind}/${t.id}">
-    <div class="rel">${poster(t.poster, t.name)}${added ? `<span class="inlist" title="Dans ta collection">${ICON.check}</span>` : ''}${g.unseen ? '<span class="newtag">Nouveau</span>' : ''}
+    <div class="rel">${poster(t.poster, t.name)}${added ? `<span class="inlist" title="Dans ta collection">${ICON.check}</span>` : tileAdd(g.kind, t.id)}${g.unseen ? '<span class="newtag">Nouveau</span>' : ''}
       <span class="avs onposter">${froms.slice(0, 4).map(u => avatar(u, 'sm')).join('')}${froms.length > 4 ? `<span class="av sm more">+${froms.length - 4}</span>` : ''}</span></div>
     <div class="tile-name">${esc(t.name)}</div>
     <div class="sug-from">${esc(names)}</div>
@@ -2732,6 +2743,7 @@ const actions = {
     ui.addOpen = ui.addOpen === k ? null : k;
     rerender();
   },
+  noop() {},
   async ['quickadd-as']({ type, id, st }, el) {
     id = Number(id);
     for (const b of el.parentElement.querySelectorAll('button')) b.disabled = true;

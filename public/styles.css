@@ -235,6 +235,14 @@ h2 small { font-weight: 600; letter-spacing: 0; text-transform: none; font-size:
 .addchoice { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; animation: pop-in .2s ease-out; }
 .addchoice .btn { justify-content: center; }
 .addchoice svg { width: 18px; height: 18px; }
+.tileplus { position: absolute; top: 6px; right: 6px; z-index: 2; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center; background: rgba(10, 12, 16, .72); color: #fff; backdrop-filter: blur(4px); }
+.tileplus svg { width: 18px; height: 18px; transition: transform .2s; }
+.tileplus.open svg { transform: rotate(45deg); }
+.tilechoice { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 6px;
+  padding: 6px; border-radius: 10px; background: linear-gradient(to bottom, rgba(0,0,0,.15), rgba(0,0,0,.75)); animation: none; }
+.tilechoice .btn { min-height: 34px; padding: 6px 8px; font-size: 13px; gap: 5px; animation: pop-in .2s ease-out; }
+.tilechoice svg { width: 15px; height: 15px; }
 
 /* ---------- fiches détail ---------- */
 .hero { position: relative; min-height: 200px; }
