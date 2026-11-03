@@ -292,6 +292,15 @@ async function addMovie(id, status) {
   return state.movies[id];
 }
 function setEps(id, list, on) { commit({ op: 'eps', id: Number(id), list, on }); }
+// Envoie tout de suite les changements en attente (le serveur doit les connaître avant la suite).
+async function syncNow() {
+  clearTimeout(flushTimer);
+  for (let k = 0; k < 20 && queue.length; k++) {
+    await flush();
+    if (queue.length) await new Promise(r => setTimeout(r, 300));
+  }
+  if (queue.length) throw new Error('Connexion impossible pour l’instant, réessaie dans un moment.');
+}
 
 /* ================= Formatage ================= */
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1493,6 +1502,9 @@ function quizzableTitles() {
   return [...tv, ...mv].sort((a, b) => b.at - a.at);
 }
 
+// Le quiz libre d'un titre n'est ouvert qu'une fois vu (au moins un épisode pour une série).
+const hasSeen = (kind, id) => kind === 'tv' ? Object.keys(state.shows[id]?.watched || {}).length > 0 : state.movies[id]?.status === 'watched';
+
 function gamesHTML(cur) {
   const r = useData('/api/games' + (cur ? `?group=${cur.id}` : ''), 20e3);
   if (r.loading) return spinner();
@@ -1527,7 +1539,9 @@ function gamesHTML(cur) {
           <span class="min0 grow"><b>${esc(k.title.name)}</b><span class="muted small">👑 ${esc(mine ? 'Toi' : u?.name || '?')} · ${k.correct}/${k.total} · ${fmtPts(k.score)}</span></span>
           ${mine
             ? `<button class="btn small" data-act="duel-pick" data-kind="${k.kind}" data-id="${k.title.id}" data-name="${esc(k.title.name)}">⚔️ Défier</button>`
-            : `<button class="btn small" data-act="quiz-start" data-mode="free" data-kind="${k.kind}" data-id="${k.title.id}">Le battre</button>`}</div>`;
+            : hasSeen(k.kind, k.title.id)
+              ? `<button class="btn small" data-act="quiz-start" data-mode="free" data-kind="${k.kind}" data-id="${k.title.id}">Le battre</button>`
+              : `<button class="btn small primary" data-act="king-seen" data-kind="${k.kind}" data-id="${k.title.id}" data-name="${esc(k.title.name)}">👁️ J’ai vu</button>`}</div>`;
       }).join('')}</div>` : ''}
     <h2>Quiz libre</h2>
     ${titles.length
@@ -2755,6 +2769,24 @@ const actions = {
     startQuiz(mode === 'daily' ? { mode } : challenge ? { mode, challenge: Number(challenge) } : { mode, kind, id: Number(id) });
   },
   ['duel-pick']({ kind, id, name }) { sendDuel(kind, id, name); },
+  // « Qui connaît le mieux » sur un titre pas encore vu : on le marque vu, puis la partie démarre.
+  async ['king-seen']({ kind, id, name }, el) {
+    const tv = kind === 'tv';
+    if (!await ask({
+      title: tv ? 'Tu as vu cette série ?' : 'Tu as vu ce film ?',
+      text: tv ? `Tous les épisodes déjà sortis de « ${name} » seront cochés comme vus, puis le quiz se lance.` : `« ${name} » sera marqué comme vu, puis le quiz se lance.`,
+      yes: 'Oui, marquer et jouer', no: 'Annuler',
+    })) return;
+    el.disabled = true;
+    try {
+      if (tv) {
+        const sh = await trackShow(id);
+        setEps(id, airedEpisodes(sh).filter(([s, e]) => !sh.watched[epKey(s, e)]), true);
+      } else await addMovie(id, 'watched');
+      await syncNow();
+    } catch (e) { el.disabled = false; return fail(e); }
+    startQuiz({ mode: 'free', kind, id: Number(id) });
+  },
   ['quiz-pick']({ c }) { quizAnswer(Number(c)); },
   ['quiz-again']() { const { mode, kind, id } = ui.quiz.body; startQuiz({ mode, kind, id }); },
   async ['quiz-quit']() {
