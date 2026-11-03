@@ -360,7 +360,8 @@ route('GET', /^\/api\/me$/, async ({ user }) => {
   const duels = db.prepare(`SELECT c.id, c.from_id, u.name, c.kind, c.tid, c.score, c.correct, c.total FROM quiz_challenges c
     JOIN users u ON u.id = c.from_id WHERE c.to_id = ? AND c.done_at IS NULL ORDER BY c.created_at DESC LIMIT 10`).all(user.id)
     .map(c => ({ id: c.id, from: c.name, title: brief(c.kind, c.tid).name, score: c.score, correct: c.correct, total: c.total }));
-  return { user: { ...publicUser(user), email: user.email || null, admin: admin || undefined }, badges: { requests: 0, recos, duels: duels.length }, announcement: ann || null, duels };
+  return { user: { ...publicUser(user), email: user.email || null, admin: admin || undefined },
+    badges: { requests: 0, recos, duels: duels.length, quiz: playedDaily(user.id, localDay()) ? 0 : 1 }, announcement: ann || null, duels };
 });
 
 route('POST', /^\/api\/announcement\/(\d+)\/seen$/, async ({ user, match }) => {
@@ -857,7 +858,7 @@ route('POST', /^\/api\/reactions$/, async ({ user, body }) => {
 });
 
 /* ----- notifications sur le téléphone ----- */
-const NOTIF_KINDS = ['episodes', 'recos', 'replies', 'reactions', 'games'];
+const NOTIF_KINDS = ['episodes', 'recos', 'replies', 'reactions', 'games', 'quiz'];
 function notifPrefs(uid) {
   const row = db.prepare('SELECT prefs FROM notif_prefs WHERE user_id = ?').get(uid);
   const p = row ? JSON.parse(row.prefs) : {};
@@ -887,6 +888,28 @@ function notifyReaction(owner, user, emoji, item) {
 
 // Nouveaux épisodes du jour pour les séries suivies : un seul message le matin (à partir de 9 h).
 const localDay = (t = new Date()) => `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+const playedDaily = (uid, day) => !!db.prepare(`SELECT 1 FROM quiz_runs WHERE user_id = ? AND day = ? AND mode = 'daily' AND finished_at IS NOT NULL`).get(uid, day);
+
+// Quiz du jour : un rappel entre 10 h et 21 h pour ceux qui n'y ont pas encore joué (une fois par jour).
+function sendQuizAlerts() {
+  const h = new Date().getHours();
+  if (h < 10 || h >= 21) return;
+  const day = localDay();
+  for (const { user_id } of db.prepare('SELECT DISTINCT user_id FROM push_subs').all()) {
+    if (playedDaily(user_id, day)) continue;
+    const mates = db.prepare(GROUP_MATES_SQL).all({ u: user_id }).map(r => Number(r.user_id));
+    const lead = mates.length && db.prepare(`SELECT u.name, r.score FROM quiz_runs r JOIN users u ON u.id = r.user_id
+      WHERE r.mode = 'daily' AND r.day = ? AND r.finished_at IS NOT NULL AND r.user_id IN (${mates.join(',')}) ORDER BY r.score DESC LIMIT 1`).get(day);
+    notify(user_id, 'quiz', `quiz:${day}`, {
+      title: '🎯 Le quiz du jour est prêt',
+      body: lead ? `${lead.name} mène avec ${lead.score.toLocaleString('fr-FR')} pts. À toi de jouer !` : '10 questions sur les séries et films de la bande. Sois le premier à jouer !',
+      url: '#/amis/jeux', tag: 'quiz',
+    });
+  }
+}
+setInterval(sendQuizAlerts, 10 * 60e3);
+setTimeout(sendQuizAlerts, 30e3);
+
 async function sendEpisodeAlerts() {
   if (new Date().getHours() < 9) return;
   const today = localDay();

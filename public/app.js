@@ -1281,7 +1281,7 @@ function viewAmis() {
   else if (!groups.length) body = `<div class="empty"><b>Aucun groupe pour l’instant</b>
       <p>Crée un groupe pour tes potes, ta famille ou tes collègues, puis invite-les avec un lien. Tu verras ici ce qu’ils regardent.</p>
       <button class="btn primary" data-act="group-new">${ICON.plus} Créer un groupe</button></div>`;
-  else body = `${tabs('amisTab', ui.amisTab, [['feed', 'Activité'], ['friends', 'Membres'], ['groups', 'Groupes'], ['games', 'Jeux']])}
+  else body = `${tabs('amisTab', ui.amisTab, [['feed', 'Activité'], ['friends', 'Membres'], ['groups', 'Groupes'], ['games', `Jeux${badges.quiz || badges.duels ? '<i class="tabmark" aria-label="à jouer"></i>' : ''}`]])}
     ${ui.amisTab === 'friends' ? membersHTML(r.data, cur) : ui.amisTab === 'groups' ? groupsTabHTML(r.data) : ui.amisTab === 'games' ? gamesHTML(cur) : feedHTML(cur)}`;
   return `<div class="pad">
     <header class="top"><h1>Amis</h1></header>
@@ -1700,7 +1700,8 @@ async function quizAnswer(c) {
       if (ui.quiz !== Q) return;
       if (r.done) {
         Q.result = { ...r.result, correct: r.correct, score: r.score }; Q.q = null; rerender(); quizCelebrate(Q); invalidate('/api/games', '/api/feed');
-        if (Q.body.challenge) refreshMe();
+        if (Q.body.mode === 'daily') { badges.quiz = 0; updateBadge(); }
+        if (Q.body.challenge || Q.body.mode === 'daily') refreshMe();
       }
       else quizNext().catch(fail);
     }, 1300);
@@ -1949,6 +1950,7 @@ const NOTIF_TYPES = [
   ['replies', '💬 Réponses', 'quand quelqu’un répond à un de tes avis'],
   ['reactions', '😂 Réactions', 'quand quelqu’un réagit à ton activité'],
   ['games', '🏆 Jeux', 'quand quelqu’un bat ton score à un quiz'],
+  ['quiz', '🎯 Quiz du jour', 'le matin, tant que tu n’as pas fait le quiz du jour'],
 ];
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const b64uToBytes = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
@@ -2389,8 +2391,8 @@ function updateBadge() {
   updateBadge.last = n;
   el.textContent = n > 9 ? '9+' : String(n);
   el.hidden = !n;
-  // Amis : défis à relever.
-  const d = badges.duels || 0, ad = document.getElementById('amisBadge');
+  // Amis : défis à relever, plus le quiz du jour s'il n'est pas encore fait.
+  const d = (badges.duels || 0) + (badges.quiz || 0), ad = document.getElementById('amisBadge');
   if (d > (updateBadge.lastDuels || 0) && updateBadge.lastDuels !== undefined) replay(ad, 'pop');
   updateBadge.lastDuels = d;
   ad.textContent = d > 9 ? '9+' : String(d);

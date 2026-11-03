@@ -782,6 +782,7 @@ label.btn { cursor: pointer; }
   font: 700 15px var(--font-body); color: var(--muted); white-space: nowrap;
 }
 .tabs button[aria-selected="true"] { color: var(--fg); }
+.tabmark { display: inline-block; width: 8px; height: 8px; margin-left: 5px; border-radius: 50%; background: var(--danger); vertical-align: 2px; }
 /* Le trait orange : un seul pour toute la rangée, placé sous l'onglet choisi (--i parmi --n), il glisse quand on change. */
 .tabs { position: relative; }
 .tabs::after {
