@@ -230,6 +230,11 @@ h2 small { font-weight: 600; letter-spacing: 0; text-transform: none; font-size:
 }
 .addbtn svg { width: 20px; height: 20px; }
 .addbtn.on { background: var(--accent); color: var(--accent-ink); }
+.addbtn svg { transition: transform .2s; }
+.addbtn.open svg { transform: rotate(45deg); }
+.addchoice { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; animation: pop-in .2s ease-out; }
+.addchoice .btn { justify-content: center; }
+.addchoice svg { width: 18px; height: 18px; }
 
 /* ---------- fiches détail ---------- */
 .hero { position: relative; min-height: 200px; }

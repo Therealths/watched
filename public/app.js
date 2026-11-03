@@ -695,13 +695,17 @@ function resultsHTML() {
     return `<div class="rlist gap-top">${items.map(x => {
       const type = x.media_type, title = x.name || x.title;
       const year = (x.first_air_date || x.release_date || '').slice(0, 4);
-      const on = isAdded(type, x.id);
-      return `<div class="rrow">
+      const on = isAdded(type, x.id), open = !on && ui.addOpen === `${type}:${x.id}`;
+      return `<div class="rrow ${open ? 'adding' : ''}">
         <a class="rrow-link" href="#/${type}/${x.id}">${poster(x.poster_path, title, 'w154')}
           <div class="min0"><div class="rrow-title">${esc(title)}</div>
           <div class="rrow-meta"><span class="chip">${type === 'tv' ? 'Série' : 'Film'}</span>${esc(year)}${scoreBadge(x, 'inline')}</div>
           ${x.overview ? `<div class="rrow-over">${esc(x.overview)}</div>` : ''}</div></a>
-        <button class="addbtn ${on ? 'on' : ''}" data-act="quickadd" data-type="${type}" data-id="${x.id}" aria-label="${on ? 'Déjà ajouté' : 'Ajouter'}">${on ? ICON.check : ICON.plus}</button>
+        <button class="addbtn ${on ? 'on' : ''} ${open ? 'open' : ''}" data-act="quickadd" data-type="${type}" data-id="${x.id}" aria-expanded="${open}" aria-label="${on ? 'Déjà ajouté' : open ? 'Fermer' : 'Ajouter'}">${on ? ICON.check : ICON.plus}</button>
+        ${open ? `<div class="addchoice">
+          <button class="btn small" data-act="quickadd-as" data-type="${type}" data-id="${x.id}" data-st="watchlist">${ICON.bookmark} À voir</button>
+          <button class="btn small primary" data-act="quickadd-as" data-type="${type}" data-id="${x.id}" data-st="watched">${ICON.check} J’ai vu</button>
+        </div>` : ''}
       </div>`;
     }).join('')}</div>`;
   }
@@ -2721,14 +2725,31 @@ const actions = {
     else if (!party) toast(`Saison ${n} marquée comme vue`);
   },
 
-  async quickadd({ type, id }, el) {
+  // Le + s'ouvre sur deux choix : « À voir » ou « J'ai vu ».
+  quickadd({ type, id }) {
+    if (isAdded(type, Number(id))) { location.hash = `#/${type}/${id}`; return; }
+    const k = `${type}:${id}`;
+    ui.addOpen = ui.addOpen === k ? null : k;
+    rerender();
+  },
+  async ['quickadd-as']({ type, id, st }, el) {
     id = Number(id);
-    if (isAdded(type, id)) { location.hash = `#/${type}/${id}`; return; }
-    el.disabled = true;
+    for (const b of el.parentElement.querySelectorAll('button')) b.disabled = true;
     try {
-      if (type === 'tv') { const sh = await trackShow(id); toast(`${sh.name} ajoutée à tes séries`); }
-      else { const m = await addMovie(id, 'watchlist'); toast(`${m.title} ajouté à ta liste`); }
+      if (type === 'movie') {
+        const m = await addMovie(id, st);
+        toast(st === 'watched' ? `${m.title} marqué comme vu` : `${m.title} ajouté à ta liste « À voir »`);
+      } else {
+        const sh = await trackShow(id);
+        if (st === 'watched') {
+          // Tous les épisodes déjà sortis sont cochés ; « Annuler » les décoche (la série reste suivie).
+          const list = airedEpisodes(sh).filter(([s, e]) => !sh.watched[epKey(s, e)]);
+          setEps(id, list, true);
+          toast(`${sh.name} marquée comme vue (${plural(list.length, 'épisode', 'épisodes')})`, { label: 'Annuler', run: () => { setEps(id, list, false); rerender(); } });
+        } else toast(`${sh.name} ajoutée à tes séries à voir`);
+      }
     } catch (e) { fail(e); }
+    ui.addOpen = null;
     rerender();
   },
 
@@ -3165,6 +3186,7 @@ document.addEventListener('pointercancel', () => { quizTouch = null; });
 // Un appui ailleurs referme le choix d'emoji.
 document.addEventListener('click', ev => {
   if (ui.reactOpen && !ev.target.closest('.reacts')) { ui.reactOpen = null; rerender(); }
+  if (ui.addOpen && !ev.target.closest('[data-act^="quickadd"], .addchoice')) { ui.addOpen = null; rerender(); }
 });
 
 let searchTimer;
