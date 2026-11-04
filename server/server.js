@@ -204,7 +204,14 @@ function rateLimit(key, max, windowMs) {
   list.push(now);
   attempts.set(key, list);
 }
-const clientIp = req => req.headers['cf-connecting-ip'] || req.socket.remoteAddress || '';
+// Derrière Tailscale Funnel, toutes les requêtes arrivent de 127.0.0.1 : la vraie adresse du visiteur est
+// la dernière de X-Forwarded-For (ajoutée par le proxy). Sans ça, tout le monde partagerait la même limite d'essais.
+function clientIp(req) {
+  const ra = req.socket.remoteAddress || '';
+  if (!/^(127\.|::1$|::ffff:127\.)/.test(ra)) return ra;
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
+  return fwd.at(-1) || req.headers['cf-connecting-ip'] || ra;
+}
 
 /* ================= Membres ================= */
 // Avis, suggestions et fiches : tout le monde voit tout le monde.
