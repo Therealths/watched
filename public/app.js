@@ -722,6 +722,46 @@ function rail(r, type) {
   return `<div class="rail">${items.map(x => tmdbTile(x, type)).join('')}</div>`;
 }
 
+// Animation du + : il se gonfle puis se coupe en deux bulles qui filent prendre la forme des boutons « À voir » / « J'ai vu ».
+// À la fermeture, les deux boutons se replient dans le +.
+const calmMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+function addParts() {
+  const plus = main.querySelector('[data-act="quickadd"][aria-expanded="true"]');
+  const box = plus && plus.parentElement.querySelector('.addchoice');
+  return box ? { plus, box, btns: [...box.querySelectorAll('button')] } : null;
+}
+function morph(btn, p, out) {
+  const b = btn.getBoundingClientRect();
+  const dx = p.left + p.width / 2 - (b.left + b.width / 2), dy = p.top + p.height / 2 - (b.top + b.height / 2);
+  const ball = `translate(${dx}px, ${dy}px) scale(${p.width / b.width}, ${p.height / b.height})`;
+  const col = getComputedStyle(btn).color;
+  if (out) return btn.animate([{ transform: 'none', borderRadius: '10px', color: col }, { color: 'transparent', offset: .4 }, { transform: ball, borderRadius: '50%', color: 'transparent' }],
+    { duration: 220, easing: 'cubic-bezier(.5,0,.75,0)', fill: 'forwards' });
+  // Une bulle posée sur le +, qui part d'un coup avec un petit rebond ; le texte n'apparaît qu'à l'arrivée.
+  return btn.animate([
+    { transform: ball, borderRadius: '50%', color: 'transparent' },
+    { transform: ball, borderRadius: '50%', color: 'transparent', offset: .14, easing: 'cubic-bezier(.3,1.5,.45,1)' },
+    { color: 'transparent', offset: .45 },
+    { transform: 'none', borderRadius: '10px', color: col },
+  ], { duration: 560, fill: 'backwards' });
+}
+function splitAdd() {
+  const parts = addParts();
+  if (!parts || calmMotion()) return;
+  const p = parts.plus.getBoundingClientRect();
+  parts.plus.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.3)', offset: .35 }, { transform: 'scale(.85)', offset: .65 }, { transform: 'scale(1)' }], { duration: 380, easing: 'ease-out' });
+  parts.box.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 120 });
+  parts.btns.forEach((btn, i) => morph(btn, p, false).currentTime = -60 * i);
+  navigator.vibrate?.(8);
+}
+function closeAdd() {
+  const parts = addParts(), done = () => { ui.addOpen = null; rerender(); };
+  if (!parts || calmMotion()) return done();
+  const p = parts.plus.getBoundingClientRect();
+  parts.box.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 220, easing: 'ease-in', fill: 'forwards' });
+  Promise.all(parts.btns.map(btn => morph(btn, p, true).finished)).then(done, done);
+}
+
 // Affiche d'un résultat TMDB, avec la note du public et une coche si on l'a déjà.
 // Petit + sur l'affiche d'un titre pas encore ajouté : il s'ouvre sur « À voir » / « J'ai vu ».
 function tileAdd(type, id) {
@@ -2742,8 +2782,10 @@ const actions = {
   quickadd({ type, id }) {
     if (isAdded(type, Number(id))) { location.hash = `#/${type}/${id}`; return; }
     const k = `${type}:${id}`;
-    ui.addOpen = ui.addOpen === k ? null : k;
+    if (ui.addOpen === k) { closeAdd(); return; }
+    ui.addOpen = k;
     rerender();
+    splitAdd();
   },
   noop() {},
   async ['quickadd-as']({ type, id, st }, el) {
@@ -3200,7 +3242,7 @@ document.addEventListener('pointercancel', () => { quizTouch = null; });
 // Un appui ailleurs referme le choix d'emoji.
 document.addEventListener('click', ev => {
   if (ui.reactOpen && !ev.target.closest('.reacts')) { ui.reactOpen = null; rerender(); }
-  if (ui.addOpen && !ev.target.closest('[data-act^="quickadd"], .addchoice')) { ui.addOpen = null; rerender(); }
+  if (ui.addOpen && !ev.target.closest('[data-act^="quickadd"], .addchoice')) closeAdd();
 });
 
 let searchTimer;
