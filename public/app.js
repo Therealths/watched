@@ -3357,9 +3357,17 @@ document.addEventListener('submit', async ev => {
   }
 });
 
+// Ouvrir l'appli vaut lecture : on retire les notifications restées sur le téléphone,
+// sinon la pastille reste sur l'icône de l'appli (elle suit les notifications non lues).
+function clearNotifs() {
+  navigator.clearAppBadge?.().catch(() => {});
+  navigator.serviceWorker?.getRegistration().then(r => r?.getNotifications()).then(list => list?.forEach(n => n.close())).catch(() => {});
+}
+
 // Revient sur l'appli : récupère ce qui a changé (autre téléphone, amis).
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
+  clearNotifs();
   // L'appli reste souvent ouverte en arrière-plan sur le téléphone : on regarde s'il y a une nouvelle version.
   navigator.serviceWorker?.getRegistration().then(r => r?.update()).catch(() => {});
   if (!me) return;
@@ -3376,6 +3384,7 @@ else {
   get('/api/me').then(r => { me = r.user; badges = r.badges; LS.set('sequence.me', me); loadLocal(); render(); updateBadge(); pull(); handleInvite(); showAnnouncement(r.announcement).then(() => showDuels(r.duels)).then(askEmail); }, () => {});
 }
 render();
+clearNotifs();
 if ('serviceWorker' in navigator) {
   // Nouvelle version installée : on recharge une fois pour l'afficher en entier.
   const hadController = !!navigator.serviceWorker.controller;
