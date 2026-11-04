@@ -1,5 +1,12 @@
 'use strict';
 
+/* ================= Langue ================= */
+// Français par défaut ; l'anglais se choisit dans le profil (l'appli se recharge pour tout réafficher).
+const LANG = (() => { try { return JSON.parse(localStorage.getItem('w2w.lang')) === 'en' ? 'en' : 'fr'; } catch (e) { return 'fr'; } })();
+const L = (fr, en) => (LANG === 'en' ? en : fr);
+const LOC = L('fr-FR', 'en-US');
+document.documentElement.lang = LANG;
+
 /* ================= Constantes ================= */
 const IMG = 'https://image.tmdb.org/t/p/';
 const SEASON_TTL = 6 * 3600e3;
@@ -39,14 +46,14 @@ async function request(method, url, body) {
   try {
     r = await fetch(url, {
       method, credentials: 'same-origin',
-      headers: body ? { 'content-type': 'application/json' } : {},
+      headers: body ? { 'content-type': 'application/json', 'x-lang': LANG } : { 'x-lang': LANG },
       body: body ? JSON.stringify(body) : undefined,
     });
-  } catch (e) { throw new ApiError('Pas de connexion au serveur.', 0); }
+  } catch (e) { throw new ApiError(L('Pas de connexion au serveur.', 'Can’t reach the server.'), 0); }
   let data = null;
   try { data = await r.json(); } catch (e) { /* réponse vide */ }
   if (r.status === 401 && me && !/^\/api\/(login|register|me\/password)/.test(url)) sessionExpired();
-  if (!r.ok) throw new ApiError(data?.error || `Erreur ${r.status}`, r.status);
+  if (!r.ok) throw new ApiError(data?.error || L(`Erreur ${r.status}`, `Error ${r.status}`), r.status);
   return data;
 }
 const get = url => request('GET', url);
@@ -120,9 +127,18 @@ function saveLocal() {
 function sessionExpired() {
   me = null;
   LS.del('sequence.me');
-  ui.authMsg = 'Ta session a expiré. Reconnecte-toi.';
+  ui.authMsg = L('Ta session a expiré. Reconnecte-toi.', 'Your session has expired. Please sign in again.');
   main.innerHTML = '';
   render();
+}
+
+// Langue du profil (choisie sur un autre appareil) : on l'adopte et on recharge une fois.
+function syncLang(u) {
+  const lg = u?.lang === 'en' ? 'en' : 'fr';
+  if (!u?.lang || lg === LANG || LS.get('w2w.langPending')) return false;
+  LS.set('w2w.lang', lg);
+  location.reload();
+  return true;
 }
 
 async function refreshMe() {
@@ -130,6 +146,7 @@ async function refreshMe() {
     const r = await get('/api/me');
     me = r.user; badges = r.badges;
     LS.set('sequence.me', me);
+    if (syncLang(me)) return;
     updateBadge();
     showAnnouncement(r.announcement).then(() => showDuels(r.duels)).then(askEmail);
   } catch (e) { return; }
@@ -142,7 +159,7 @@ let mailAsked = false;
 async function askEmail() {
   if (!me || me.email || mailAsked || askEl.open || (LS.get(MAIL_LATER) || 0) > Date.now() || location.hash.startsWith('#/collection') && mailInviteHTML()) return;
   mailAsked = true;
-  const yes = await ask({ title: '📧 Ajoute ton adresse mail', text: EMAIL_WHY, yes: 'Ajouter mon adresse', no: 'Plus tard' });
+  const yes = await ask({ title: L('📧 Ajoute ton adresse mail', '📧 Add your email address'), text: EMAIL_WHY, yes: L('Ajouter mon adresse', 'Add my address'), no: L('Plus tard', 'Later') });
   if (!yes) return LS.set(MAIL_LATER, Date.now() + 7 * DAY_MS);
   ui.profTab = 'settings';
   if (location.hash !== '#/profil') location.hash = '#/profil'; else render();
@@ -299,7 +316,7 @@ async function syncNow() {
     await flush();
     if (queue.length) await new Promise(r => setTimeout(r, 300));
   }
-  if (queue.length) throw new Error('Connexion impossible pour l’instant, réessaie dans un moment.');
+  if (queue.length) throw new Error(L('Connexion impossible pour l’instant, réessaie dans un moment.', 'Can’t connect right now, try again in a moment.'));
 }
 
 /* ================= Formatage ================= */
@@ -317,15 +334,15 @@ function dayDiff(iso) {
   const t = new Date(); t.setHours(0, 0, 0, 0);
   return Math.round((d - t) / 86400e3);
 }
-const fmtLong = new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-const fmtShort = new Intl.DateTimeFormat('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
-const fmtWeekday = new Intl.DateTimeFormat('fr-FR', { weekday: 'long' });
+const fmtLong = new Intl.DateTimeFormat(LOC, { day: 'numeric', month: 'long', year: 'numeric' });
+const fmtShort = new Intl.DateTimeFormat(LOC, { weekday: 'short', day: 'numeric', month: 'short' });
+const fmtWeekday = new Intl.DateTimeFormat(LOC, { weekday: 'long' });
 function relDay(iso) {
   const n = dayDiff(iso);
-  if (n === null) return 'Date inconnue';
-  if (n < 0) return 'Déjà diffusé';
-  if (n === 0) return 'Aujourd’hui';
-  if (n === 1) return 'Demain';
+  if (n === null) return L('Date inconnue', 'Date unknown');
+  if (n < 0) return L('Déjà diffusé', 'Already aired');
+  if (n === 0) return L('Aujourd’hui', 'Today');
+  if (n === 1) return L('Demain', 'Tomorrow');
   if (n < 7) return fmtWeekday.format(parseDay(iso));
   return fmtShort.format(parseDay(iso));
 }
@@ -333,28 +350,32 @@ const longDate = iso => iso ? fmtLong.format(parseDay(iso)) : '';
 
 function timeAgo(ts) {
   const min = (Date.now() - ts) / 60e3;
-  if (min < 1) return 'à l’instant';
-  if (min < 60) return `il y a ${Math.floor(min)} min`;
-  if (min < 1440) return `il y a ${Math.floor(min / 60)} h`;
+  if (min < 1) return L('à l’instant', 'just now');
+  if (min < 60) return L(`il y a ${Math.floor(min)} min`, `${Math.floor(min)} min ago`);
+  if (min < 1440) return L(`il y a ${Math.floor(min / 60)} h`, `${Math.floor(min / 60)} h ago`);
   const days = Math.floor(min / 1440);
-  if (days === 1) return 'hier';
-  if (days < 7) return `il y a ${days} j`;
-  return new Date(ts).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+  if (days === 1) return L('hier', 'yesterday');
+  if (days < 7) return L(`il y a ${days} j`, `${days} d ago`);
+  return new Date(ts).toLocaleDateString(LOC, { day: 'numeric', month: 'short' });
 }
 
 function fmtDuration(min) {
   min = Math.round(min);
   const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60), m = min % 60;
-  if (d) return `${d} j ${h} h`;
-  if (h) return m ? `${h} h ${pad(m)}` : `${h} h`;
+  if (d) return L(`${d} j ${h} h`, `${d} d ${h} h`);
+  if (h) return m ? L(`${h} h ${pad(m)}`, `${h} h ${pad(m)} min`) : `${h} h`;
   return `${m} min`;
 }
-const plural = (n, one, many) => `${n.toLocaleString('fr-FR')} ${n > 1 ? many : one}`;
+// En anglais, 0 prend le pluriel (« 0 episodes ») ; en français le singulier (« 0 épisode »).
+const plural = (n, one, many) => `${n.toLocaleString(LOC)} ${(LANG === 'en' ? n !== 1 : n > 1) ? many : one}`;
 
-const STATUS_FR = {
+const STATUS_FR = L({
   'Returning Series': 'En cours de diffusion', 'Ended': 'Terminée', 'Canceled': 'Annulée',
   'In Production': 'En production', 'Planned': 'Prévue', 'Pilot': 'Pilote',
-};
+}, {
+  'Returning Series': 'Still airing', 'Ended': 'Ended', 'Canceled': 'Canceled',
+  'In Production': 'In production', 'Planned': 'Planned', 'Pilot': 'Pilot',
+});
 
 function poster(path, alt, size = 'w342') {
   const img = path ? `<img src="${IMG}${size}${esc(path)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : '';
@@ -375,7 +396,7 @@ function avatar(u, size = '') {
 }
 function stars(n) {
   if (!n) return '';
-  return `<span class="stars" role="img" aria-label="${n} sur 5">${'★'.repeat(n)}<i>${'★'.repeat(5 - n)}</i></span>`;
+  return `<span class="stars" role="img" aria-label="${L(`${n} sur 5`, `${n} out of 5`)}">${'★'.repeat(n)}<i>${'★'.repeat(5 - n)}</i></span>`;
 }
 
 /* ================= État d'interface ================= */
@@ -402,31 +423,32 @@ const ui = {
 };
 
 /* ================= Vues : connexion ================= */
-const EMAIL_WHY = 'Seulement pour retrouver ton pseudo ou ton mot de passe si tu les perds. Personne d’autre ne la voit.';
+const EMAIL_WHY = L('Seulement pour retrouver ton pseudo ou ton mot de passe si tu les perds. Personne d’autre ne la voit.', 'Only used to recover your username or password if you lose them. Nobody else can see it.');
 function viewAuth() {
   const reg = ui.authMode === 'register';
   if (ui.authMode === 'forgot') return viewForgot();
   return `<div class="pad welcome">
     <div class="brand">${LOGO}<h1 class="wordmark">${WORDMARK}</h1></div>
     ${inviteCard() || installBlock()}
-    <p class="lede">Coche tes épisodes, garde ta liste de films et partage tes avis avec tes potes.</p>
+    <p class="lede">${L('Coche tes épisodes, garde ta liste de films et partage tes avis avec tes potes.', 'Tick off your episodes, keep your movie list and share your reviews with your friends.')}</p>
     <div class="panel">
-      ${seg('authMode', ui.authMode, [['login', 'Connexion'], ['register', 'Créer un compte']])}
+      ${seg('authMode', ui.authMode, [['login', L('Connexion', 'Sign in')], ['register', L('Créer un compte', 'Create an account')]])}
       <form id="authForm" class="form" novalidate>
-        <div class="field"><label for="au-user">Pseudo</label>
+        <div class="field"><label for="au-user">${L('Pseudo', 'Username')}</label>
           <input class="input" id="au-user" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div>
-        ${reg ? `<div class="field"><label for="au-name">Nom affiché <span class="opt">(ce que tes amis verront)</span></label>
+        ${reg ? `<div class="field"><label for="au-name">${L('Nom affiché <span class="opt">(ce que tes amis verront)</span>', 'Display name <span class="opt">(what your friends will see)</span>')}</label>
           <input class="input" id="au-name" name="name" autocomplete="nickname" maxlength="40"></div>
-        <div class="field"><label for="au-mail">Adresse mail</label>
+        <div class="field"><label for="au-mail">${L('Adresse mail', 'Email address')}</label>
           <input class="input" id="au-mail" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" required>
           <p class="muted small field-help">🔒 ${EMAIL_WHY}</p></div>` : ''}
-        <div class="field"><label for="au-pass">Mot de passe${reg ? ' <span class="opt">(8 caractères minimum)</span>' : ''}</label>
+        <div class="field"><label for="au-pass">${L('Mot de passe', 'Password')}${reg ? L(' <span class="opt">(8 caractères minimum)</span>', ' <span class="opt">(at least 8 characters)</span>') : ''}</label>
           <input class="input" id="au-pass" name="password" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required></div>
         ${ui.authMsg ? `<div class="err">${esc(ui.authMsg)}</div>` : ''}
-        <button class="btn primary" type="submit">${reg ? 'Créer mon compte' : 'Me connecter'}</button>
-        ${reg ? '' : `<button type="button" class="linkbtn forgot-link" data-act="forgot">Pseudo ou mot de passe oublié ?</button>`}
+        <button class="btn primary" type="submit">${reg ? L('Créer mon compte', 'Create my account') : L('Me connecter', 'Sign in')}</button>
+        ${reg ? '' : `<button type="button" class="linkbtn forgot-link" data-act="forgot">${L('Pseudo ou mot de passe oublié ?', 'Forgot your username or password?')}</button>`}
       </form>
     </div>
+    <div class="lang-pick">${seg('lang', LANG, [['fr', 'Français'], ['en', 'English']])}</div>
   </div>`;
 }
 
@@ -435,17 +457,17 @@ function viewForgot() {
   return `<div class="pad welcome">
     <div class="brand">${LOGO}<h1 class="wordmark">${WORDMARK}</h1></div>
     <div class="panel">
-      <h2 class="forgot-title">Pseudo ou mot de passe oublié</h2>
-      ${ui.forgotSent ? `<p>✅ Demande envoyée. L’administrateur de l’appli va te recontacter avec ton pseudo et un mot de passe provisoire, que tu pourras changer ensuite dans Profil.</p>
-        <p class="muted small">Si tu n’avais pas enregistré d’adresse mail, contacte-le directement.</p>`
-      : `<p class="muted">Entre l’adresse mail de ton compte. L’administrateur de l’appli recevra ta demande et te recontactera.</p>
+      <h2 class="forgot-title">${L('Pseudo ou mot de passe oublié', 'Forgot your username or password')}</h2>
+      ${ui.forgotSent ? `<p>${L('✅ Demande envoyée. L’administrateur de l’appli va te recontacter avec ton pseudo et un mot de passe provisoire, que tu pourras changer ensuite dans Profil.', '✅ Request sent. The app’s admin will get back to you with your username and a temporary password, which you can then change in Profile.')}</p>
+        <p class="muted small">${L('Si tu n’avais pas enregistré d’adresse mail, contacte-le directement.', 'If you hadn’t saved an email address, contact them directly.')}</p>`
+      : `<p class="muted">${L('Entre l’adresse mail de ton compte. L’administrateur de l’appli recevra ta demande et te recontactera.', 'Enter your account’s email address. The app’s admin will get your request and contact you.')}</p>
       <form id="forgotForm" class="form" novalidate>
-        <div class="field"><label for="fg-mail">Adresse mail</label>
+        <div class="field"><label for="fg-mail">${L('Adresse mail', 'Email address')}</label>
           <input class="input" id="fg-mail" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" required></div>
         ${ui.authMsg ? `<div class="err">${esc(ui.authMsg)}</div>` : ''}
-        <button class="btn primary" type="submit">Envoyer la demande</button>
+        <button class="btn primary" type="submit">${L('Envoyer la demande', 'Send request')}</button>
       </form>`}
-      <button type="button" class="linkbtn forgot-link" data-act="forgot-back">← Retour à la connexion</button>
+      <button type="button" class="linkbtn forgot-link" data-act="forgot-back">${L('← Retour à la connexion', '← Back to sign in')}</button>
     </div>
   </div>`;
 }
@@ -457,7 +479,7 @@ function inviteCard() {
   const g = useData(`/api/invite/${code}`, 3600e3).data?.group;
   if (!g) return '';
   return `<div class="invite-card"><span class="gemoji">${esc(g.emoji)}</span>
-    <div class="min0"><b>Tu es invité dans « ${esc(g.name)} »</b><div class="muted small">Crée ton compte ou connecte-toi pour rejoindre le groupe (${plural(g.count, 'membre', 'membres')}).</div></div></div>`;
+    <div class="min0"><b>${L(`Tu es invité dans « ${esc(g.name)} »`, `You’re invited to “${esc(g.name)}”`)}</b><div class="muted small">${L(`Crée ton compte ou connecte-toi pour rejoindre le groupe (${plural(g.count, 'membre', 'membres')}).`, `Create an account or sign in to join the group (${plural(g.count, 'member', 'members')}).`)}</div></div></div>`;
 }
 
 async function submitAuth(form) {
@@ -465,10 +487,13 @@ async function submitAuth(form) {
   const body = Object.fromEntries(new FormData(form));
   const invite = LS.get('w2w.invite');
   if (reg && invite) body.invite = invite;   // le serveur l'ajoute directement au groupe
+  body.lang = LANG;
   ui.authMsg = '';
   try {
     const r = await post(reg ? '/api/register' : '/api/login', body);
     me = r.user;
+    // Langue choisie sur l'écran de connexion : elle devient celle du compte.
+    if (LS.get('w2w.langPending')) { LS.del('w2w.langPending'); me.lang = LANG; post('/api/me/lang', { lang: LANG }).catch(() => {}); }
     LS.set('sequence.me', me);
     loadLocal();
     main.innerHTML = '';
@@ -477,7 +502,7 @@ async function submitAuth(form) {
       if (reg) {
         LS.del('w2w.invite');
         const g = mem.get(`/api/invite/${invite}`)?.data?.group;
-        if (g) { setGroup(g.id); target = '#/amis'; toast(`Bienvenue dans ${g.emoji} ${g.name}`); }
+        if (g) { setGroup(g.id); target = '#/amis'; toast(L(`Bienvenue dans ${g.emoji} ${g.name}`, `Welcome to ${g.emoji} ${g.name}`)); }
       } else setTimeout(handleInvite, 300);
     }
     if (location.hash !== target) location.hash = target; else render();
@@ -509,9 +534,9 @@ function seg(name, current, options) {
 function viewCollection() {
   const nTv = Object.keys(state.shows).length, nMv = Object.keys(state.movies).length;
   return `<div class="pad">
-    <header class="top"><h1>Collection</h1></header>
+    <header class="top"><h1>${L('Collection', 'Library')}</h1></header>
     ${mailInviteHTML() || pushInviteHTML()}
-    ${tabs('collTab', ui.collTab, [['tv', `Séries · ${nTv}`], ['movie', `Films · ${nMv}`]])}
+    ${tabs('collTab', ui.collTab, [['tv', `${L('Séries', 'Shows')} · ${nTv}`], ['movie', `${L('Films', 'Movies')} · ${nMv}`]])}
     <div class="subseg">${ui.collTab === 'movie' ? filmsBody() : seriesBody()}</div>
   </div>`;
 }
@@ -520,13 +545,13 @@ function seriesBody() {
   const shows = Object.values(state.shows);
   let body;
   if (!shows.length) {
-    body = `<div class="empty"><b>Aucune série suivie</b><p>Cherche une série et appuie sur + pour la suivre épisode par épisode.</p><a class="btn primary" href="#/decouvrir">Trouver une série</a></div>`;
+    body = `<div class="empty"><b>${L('Aucune série suivie', 'No shows yet')}</b><p>${L('Cherche une série et appuie sur + pour la suivre épisode par épisode.', 'Search for a show and tap + to follow it episode by episode.')}</p><a class="btn primary" href="#/decouvrir">${L('Trouver une série', 'Find a show')}</a></div>`;
   } else if (ui.seriesTab !== 'all') {
     body = timelineHTML(shows);
   } else {
-    const groups = [['watching', 'En cours'], ['notstarted', 'Pas commencées'], ['uptodate', 'À jour'], ['finished', 'Terminées'], ['archived', 'Abandonnées']];
+    const groups = [['watching', L('En cours', 'Watching')], ['notstarted', L('Pas commencées', 'Not started')], ['uptodate', L('À jour', 'Up to date')], ['finished', L('Terminées', 'Finished')], ['archived', L('Abandonnées', 'Dropped')]];
     body = groups.map(([b, label]) => {
-      const list = shows.filter(s => bucket(s) === b).sort((x, y) => x.name.localeCompare(y.name, 'fr'));
+      const list = shows.filter(s => bucket(s) === b).sort((x, y) => x.name.localeCompare(y.name, LANG));
       if (!list.length) return '';
       return `<h2>${label} <small>${list.length}</small></h2><div class="grid">${list.map(sh => {
         const p = progress(sh);
@@ -535,8 +560,8 @@ function seriesBody() {
     }).join('');
   }
   const jump = ui.seriesTab !== 'all' && body.includes('class="wlist"')
-    ? `<button type="button" class="btn small cal-jump" data-act="cal-jump">📅 Prochaines sorties</button>` : '';
-  return `${shows.length ? `<div class="seg-row">${seg('seriesTab', ui.seriesTab === 'all' ? 'all' : 'watch', [['watch', 'À regarder'], ['all', 'Toutes']])}${jump}</div>` : ''}
+    ? `<button type="button" class="btn small cal-jump" data-act="cal-jump">${L('📅 Prochaines sorties', '📅 Coming up')}</button>` : '';
+  return `${shows.length ? `<div class="seg-row">${seg('seriesTab', ui.seriesTab === 'all' ? 'all' : 'watch', [['watch', L('À regarder', 'Up next')], ['all', L('Toutes', 'All')]])}${jump}</div>` : ''}
     ${body}`;
 }
 
@@ -545,27 +570,27 @@ function timelineHTML(shows) {
   const watching = shows.filter(s => bucket(s) === 'watching').sort((a, b) => lastWatchedAt(b) - lastWatchedAt(a));
   const fresh = shows.filter(s => bucket(s) === 'notstarted').sort((a, b) => b.addedAt - a.addedAt);
   let html = '';
-  if (watching.length) html += `<h2>À regarder <small>${watching.length}</small></h2><div class="wlist">${watching.map(watchCard).join('')}</div>`;
-  if (fresh.length) html += `<h2>Pas encore commencées <small>${fresh.length}</small></h2><div class="wlist">${fresh.map(watchCard).join('')}</div>`;
-  if (!html) html = `<p class="muted uptodate">${ICON.check} Tu es à jour : plus aucun épisode en retard.</p>`;
+  if (watching.length) html += `<h2>${L('À regarder', 'Up next')} <small>${watching.length}</small></h2><div class="wlist">${watching.map(watchCard).join('')}</div>`;
+  if (fresh.length) html += `<h2>${L('Pas encore commencées', 'Not started yet')} <small>${fresh.length}</small></h2><div class="wlist">${fresh.map(watchCard).join('')}</div>`;
+  if (!html) html = `<p class="muted uptodate">${ICON.check} ${L('Tu es à jour : plus aucun épisode en retard.', 'You’re all caught up: no episodes left to watch.')}</p>`;
 
   const today = new Date();
-  html += `<div class="nowline"><span>Aujourd’hui · ${esc(fmtLong.format(today))}</span></div>`;
+  html += `<div class="nowline"><span>${L('Aujourd’hui', 'Today')} · ${esc(fmtLong.format(today))}</span></div>`;
 
   const ups = [...upcomingEpisodes(shows), ...upcomingMovies()].sort((a, b) => a.d.localeCompare(b.d));
-  if (!ups.length) return html + `<p class="muted gap-top">Aucune date de sortie annoncée pour tes séries et tes films à voir.</p>`;
+  if (!ups.length) return html + `<p class="muted gap-top">${L('Aucune date de sortie annoncée pour tes séries et tes films à voir.', 'No release dates announced yet for your shows and watchlist movies.')}</p>`;
   let lastDay = null;
   for (const u of ups) {
     if (u.d !== lastDay) {
       lastDay = u.d;
       // Le jour même est déjà annoncé par la ligne « Aujourd'hui ».
       const n = dayDiff(u.d), d = parseDay(u.d);
-      if (n > 0) html += `<div class="daylabel">${n === 1 ? 'Demain' : esc(fmtWeekday.format(d))}<small>${esc(fmtLong.format(d))}</small></div>`;
+      if (n > 0) html += `<div class="daylabel">${n === 1 ? L('Demain', 'Tomorrow') : esc(fmtWeekday.format(d))}<small>${esc(fmtLong.format(d))}</small></div>`;
     }
     if (u.mv) {
       html += `<a class="uprow" href="#/movie/${u.mv.id}">${poster(u.mv.poster, u.mv.title, 'w154')}
         <div class="min0"><div class="uprow-name">${esc(u.mv.title)}</div>
-        <div class="uprow-ep"><span class="code">Film</span>Sortie en France</div></div>
+        <div class="uprow-ep"><span class="code">${L('Film', 'Movie')}</span>${L('Sortie en France', 'Release in France')}</div></div>
         ${daysLeft(dayDiff(u.d))}</a>`;
       continue;
     }
@@ -589,7 +614,7 @@ function upcomingEpisodes(shows) {
     if (eps.length) out.push(...eps);
     else if (sh.next.d && dayDiff(sh.next.d) >= 0) out.push({ sh, s: sh.next.s, e: sh.next.e, d: sh.next.d, name: sh.next.name });
   }
-  return out.sort((a, b) => a.d.localeCompare(b.d) || a.sh.name.localeCompare(b.sh.name, 'fr') || a.e - b.e);
+  return out.sort((a, b) => a.d.localeCompare(b.d) || a.sh.name.localeCompare(b.sh.name, LANG) || a.e - b.e);
 }
 
 // Films « à voir » dont la sortie est annoncée (aujourd'hui ou plus tard).
@@ -600,15 +625,15 @@ function upcomingMovies() {
 }
 
 function daysLeft(n) {
-  if (n === 0) return `<div class="left today"><b>Auj.</b></div>`;
-  return `<div class="left"><b>${n}</b><span>${n === 1 ? 'jour' : 'jours'}</span></div>`;
+  if (n === 0) return `<div class="left today"><b>${L('Auj.', 'Today')}</b></div>`;
+  return `<div class="left"><b>${n}</b><span>${n === 1 ? L('jour', 'day') : L('jours', 'days')}</span></div>`;
 }
 
 // Petit bouton crayon posé sur l'affiche d'un titre vu mais pas encore commenté.
 function reviewPin(kind, id) {
   const r = useData('/api/reviews/mine', 60e3);
   if (!r.data || r.data.items.includes(kind + ':' + id)) return '';
-  return `<span class="tile-review" role="button" tabindex="0" data-act="review-open" data-kind="${kind}" data-id="${id}" aria-label="Écrire un avis">${ICON.pen}</span>`;
+  return `<span class="tile-review" role="button" tabindex="0" data-act="review-open" data-kind="${kind}" data-id="${id}" aria-label="${L('Écrire un avis', 'Write a review')}">${ICON.pen}</span>`;
 }
 
 function showTile(sh, watched, aired) {
@@ -616,7 +641,7 @@ function showTile(sh, watched, aired) {
   return `<a class="tile" href="#/tv/${sh.id}"><div class="rel">${poster(sh.poster, sh.name)}${watched ? reviewPin('tv', sh.id) : ''}</div>
     <div class="bar"><i style="width:${pct}%"></i></div>
     <div class="tile-name">${esc(sh.name)}</div>
-    <div class="tile-sub">${watched}/${aired} ép.</div></a>`;
+    <div class="tile-sub">${watched}/${aired} ${L('ép.', 'ep.')}</div></a>`;
 }
 
 function watchCard(sh) {
@@ -629,9 +654,9 @@ function watchCard(sh) {
       <a href="#/tv/${sh.id}" class="wcard-title">${esc(sh.name)}</a>
       <a href="#/ep/${sh.id}/${n.s}/${n.e}" class="wcard-ep"><span class="code">${code(n.s, n.e)}</span><span data-title="${sh.id}:${n.s}:${n.e}"></span></a>
       <div class="bar"><i style="width:${pct}%"></i></div>
-      <div class="wcard-meta">${p.left > 1 ? plural(p.left, 'épisode restant', 'épisodes restants') : 'Dernier épisode disponible'}</div>
+      <div class="wcard-meta">${p.left > 1 ? L(plural(p.left, 'épisode restant', 'épisodes restants'), plural(p.left, 'episode left', 'episodes left')) : L('Dernier épisode disponible', 'Latest episode available')}</div>
     </div>
-    <button class="checkbtn" data-act="next" data-id="${sh.id}" aria-label="Marquer ${code(n.s, n.e)} comme vu">${ICON.check}</button>
+    <button class="checkbtn" data-act="next" data-id="${sh.id}" aria-label="${L(`Marquer ${code(n.s, n.e)} comme vu`, `Mark ${code(n.s, n.e)} as watched`)}">${ICON.check}</button>
   </article>`;
 }
 
@@ -654,27 +679,27 @@ function filmsBody() {
   let body;
   if (!list.length) {
     body = ui.filmsTab === 'watchlist'
-      ? `<div class="empty"><b>Ta liste est vide</b><p>Ajoute les films que tu veux voir depuis Découvrir.</p><a class="btn primary" href="#/decouvrir">Trouver un film</a></div>`
-      : `<div class="empty"><b>Aucun film vu</b><p>Marque un film comme vu depuis sa fiche pour le retrouver ici.</p></div>`;
+      ? `<div class="empty"><b>${L('Ta liste est vide', 'Your list is empty')}</b><p>${L('Ajoute les films que tu veux voir depuis Découvrir.', 'Add the movies you want to see from Discover.')}</p><a class="btn primary" href="#/decouvrir">${L('Trouver un film', 'Find a movie')}</a></div>`
+      : `<div class="empty"><b>${L('Aucun film vu', 'No movies watched')}</b><p>${L('Marque un film comme vu depuis sa fiche pour le retrouver ici.', 'Mark a movie as watched from its page to find it here.')}</p></div>`;
   } else {
     body = `<div class="grid gap-top">${list.map(movieTile).join('')}</div>`;
   }
-  return `${seg('filmsTab', ui.filmsTab, [['watchlist', `À voir · ${counts.watchlist}`], ['watched', `Vus · ${counts.watched}`]])}
+  return `${seg('filmsTab', ui.filmsTab, [['watchlist', `${L('À voir', 'Watchlist')} · ${counts.watchlist}`], ['watched', `${L('Vus', 'Watched')} · ${counts.watched}`]])}
     ${body}`;
 }
 function movieTile(m) {
   return `<a class="tile" href="#/movie/${m.id}"><div class="rel">${poster(m.poster, m.title)}${m.status === 'watched' ? reviewPin('movie', m.id) : ''}</div>
     <div class="tile-name">${esc(m.title)}</div>
-    <div class="tile-sub">${esc(m.year || '')}${m.status === 'watched' && m.watchedAt ? ' · vu le ' + new Date(m.watchedAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) : ''}</div></a>`;
+    <div class="tile-sub">${esc(m.year || '')}${m.status === 'watched' && m.watchedAt ? L(' · vu le ', ' · watched ') + new Date(m.watchedAt).toLocaleDateString(LOC, { day: 'numeric', month: 'short' }) : ''}</div></a>`;
 }
 
 /* ================= Vues : découvrir ================= */
 function viewDiscover() {
   return `<div class="pad">
-    <header class="top"><h1>Découvrir</h1></header>
+    <header class="top"><h1>${L('Découvrir', 'Discover')}</h1></header>
     <div class="searchrow">
       <label class="searchbox">${ICON.search}
-        <input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Une série, un film…" value="${esc(ui.query)}" aria-label="Rechercher une série ou un film">
+        <input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="${L('Une série, un film…', 'A show, a movie…')}" value="${esc(ui.query)}" aria-label="${L('Rechercher une série ou un film', 'Search for a show or a movie')}">
       </label>
       ${advBtnHTML()}
     </div>
@@ -688,10 +713,10 @@ function resultsHTML() {
   const q = ui.query.trim();
   if (q.length >= 2) {
     const r = useData(tmdbUrl('/search/multi', { query: q, include_adult: 'false' }));
-    if (r.loading) return spinner('Recherche…');
+    if (r.loading) return spinner(L('Recherche…', 'Searching…'));
     if (r.error) return errorBlock(r.error);
     const items = (r.data.results || []).filter(x => x.media_type === 'tv' || x.media_type === 'movie');
-    if (!items.length) return `<div class="empty"><b>Aucun résultat</b><p>Essaie avec le titre original ou moins de mots.</p></div>`;
+    if (!items.length) return `<div class="empty"><b>${L('Aucun résultat', 'No results')}</b><p>${L('Essaie avec le titre original ou moins de mots.', 'Try the original title or fewer words.')}</p></div>`;
     return `<div class="rlist gap-top">${items.map(x => {
       const type = x.media_type, title = x.name || x.title;
       const year = (x.first_air_date || x.release_date || '').slice(0, 4);
@@ -699,26 +724,26 @@ function resultsHTML() {
       return `<div class="rrow ${open ? 'adding' : ''}">
         <a class="rrow-link" href="#/${type}/${x.id}">${poster(x.poster_path, title, 'w154')}
           <div class="min0"><div class="rrow-title">${esc(title)}</div>
-          <div class="rrow-meta"><span class="chip">${type === 'tv' ? 'Série' : 'Film'}</span>${esc(year)}${scoreBadge(x, 'inline')}</div>
+          <div class="rrow-meta"><span class="chip">${type === 'tv' ? L('Série', 'Show') : L('Film', 'Movie')}</span>${esc(year)}${scoreBadge(x, 'inline')}</div>
           ${x.overview ? `<div class="rrow-over">${esc(x.overview)}</div>` : ''}</div></a>
-        <button class="addbtn ${on ? 'on' : ''} ${open ? 'open' : ''}" data-act="quickadd" data-type="${type}" data-id="${x.id}" aria-expanded="${open}" aria-label="${on ? 'Déjà ajouté' : open ? 'Fermer' : 'Ajouter'}">${on ? ICON.check : ICON.plus}</button>
+        <button class="addbtn ${on ? 'on' : ''} ${open ? 'open' : ''}" data-act="quickadd" data-type="${type}" data-id="${x.id}" aria-expanded="${open}" aria-label="${on ? L('Déjà ajouté', 'Already added') : open ? L('Fermer', 'Close') : L('Ajouter', 'Add')}">${on ? ICON.check : ICON.plus}</button>
         ${open ? `<div class="addchoice">
-          <button class="btn small" data-act="quickadd-as" data-type="${type}" data-id="${x.id}" data-st="watchlist">${ICON.bookmark} À voir</button>
-          <button class="btn small primary" data-act="quickadd-as" data-type="${type}" data-id="${x.id}" data-st="watched">${ICON.check} J’ai vu</button>
+          <button class="btn small" data-act="quickadd-as" data-type="${type}" data-id="${x.id}" data-st="watchlist">${ICON.bookmark} ${L('À voir', 'To watch')}</button>
+          <button class="btn small primary" data-act="quickadd-as" data-type="${type}" data-id="${x.id}" data-st="watched">${ICON.check} ${L('J’ai vu', 'Seen it')}</button>
         </div>` : ''}
       </div>`;
     }).join('')}</div>`;
   }
   if (ui.advOn) return advResultsHTML();
-  return `<h2>Séries populaires cette semaine</h2>${rail(useData(tmdbUrl('/trending/tv/week')), 'tv')}
-    <h2>Films populaires cette semaine</h2>${rail(useData(tmdbUrl('/trending/movie/week')), 'movie')}`;
+  return `<h2>${L('Séries populaires cette semaine', 'Trending shows this week')}</h2>${rail(useData(tmdbUrl('/trending/tv/week')), 'tv')}
+    <h2>${L('Films populaires cette semaine', 'Trending movies this week')}</h2>${rail(useData(tmdbUrl('/trending/movie/week')), 'movie')}`;
 }
 
 function rail(r, type) {
   if (r.loading) return skelRail();
   if (r.error) return errorBlock(r.error);
   const items = (r.data.results || []).slice(0, 20);
-  if (!items.length) return `<p class="muted">Rien à proposer pour l’instant.</p>`;
+  if (!items.length) return `<p class="muted">${L('Rien à proposer pour l’instant.', 'Nothing to suggest right now.')}</p>`;
   return `<div class="rail">${items.map(x => tmdbTile(x, type)).join('')}</div>`;
 }
 
@@ -767,10 +792,10 @@ function closeAdd() {
 function tileAdd(type, id) {
   if (isAdded(type, id)) return '';
   const open = ui.addOpen === `${type}:${id}`;
-  return `<button class="tileplus ${open ? 'open' : ''}" data-act="quickadd" data-type="${type}" data-id="${id}" aria-expanded="${open}" aria-label="${open ? 'Fermer' : 'Ajouter'}">${ICON.plus}</button>
+  return `<button class="tileplus ${open ? 'open' : ''}" data-act="quickadd" data-type="${type}" data-id="${id}" aria-expanded="${open}" aria-label="${open ? L('Fermer', 'Close') : L('Ajouter', 'Add')}">${ICON.plus}</button>
     ${open ? `<span class="tilechoice addchoice" data-act="noop">
-      <button class="btn small" data-act="quickadd-as" data-type="${type}" data-id="${id}" data-st="watchlist">${ICON.bookmark} À voir</button>
-      <button class="btn small primary" data-act="quickadd-as" data-type="${type}" data-id="${id}" data-st="watched">${ICON.check} J’ai vu</button>
+      <button class="btn small" data-act="quickadd-as" data-type="${type}" data-id="${id}" data-st="watchlist">${ICON.bookmark} ${L('À voir', 'To watch')}</button>
+      <button class="btn small primary" data-act="quickadd-as" data-type="${type}" data-id="${id}" data-st="watched">${ICON.check} ${L('J’ai vu', 'Seen it')}</button>
     </span>` : ''}`;
 }
 
@@ -781,27 +806,27 @@ function tmdbTile(x, type, withYear) {
 }
 
 /* ----- Notes de la communauté TMDB (sur 10) ----- */
-const fmtScore = n => (Math.round(n * 10) / 10).toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const fmtScore = n => (Math.round(n * 10) / 10).toLocaleString(LOC, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const scoreLvl = n => n >= 7 ? 'hi' : n >= 5.5 ? 'mid' : 'lo';
 // Pas de note affichée en dessous de 10 votes : trop peu pour vouloir dire quelque chose.
 function scoreBadge(x, cls = '') {
   if (!x?.vote_average || (x.vote_count || 0) < 10) return '';
-  return `<span class="score ${cls} ${scoreLvl(x.vote_average)}" aria-label="Note TMDB ${fmtScore(x.vote_average)} sur 10">★ ${fmtScore(x.vote_average)}</span>`;
+  return `<span class="score ${cls} ${scoreLvl(x.vote_average)}" aria-label="${L(`Note TMDB ${fmtScore(x.vote_average)} sur 10`, `TMDB rating ${fmtScore(x.vote_average)} out of 10`)}">★ ${fmtScore(x.vote_average)}</span>`;
 }
 function scoreLine(d) {
   if (!d?.vote_average || (d.vote_count || 0) < 10) return '';
-  return `<div class="score-line">${scoreBadge(d, 'inline')}<span>/10 · ${plural(d.vote_count, 'vote', 'votes')} TMDB</span></div>`;
+  return `<div class="score-line">${scoreBadge(d, 'inline')}<span>/10 · ${L(`${plural(d.vote_count, 'vote', 'votes')} TMDB`, `${plural(d.vote_count, 'TMDB vote', 'TMDB votes')}`)}</span></div>`;
 }
 
 /* ================= Recherche avancée ================= */
 const YEAR = new Date().getFullYear();
-const ADV_PERIODS = [[YEAR, YEAR, 'Cette année'], [2020, YEAR, 'Années 2020'], [2010, 2019, 'Années 2010'], [2000, 2009, 'Années 2000'], [1990, 1999, 'Années 90'], ['', 1989, 'Avant 1990']];
+const ADV_PERIODS = [[YEAR, YEAR, L('Cette année', 'This year')], [2020, YEAR, L('Années 2020', '2020s')], [2010, 2019, L('Années 2010', '2010s')], [2000, 2009, L('Années 2000', '2000s')], [1990, 1999, L('Années 90', '’90s')], ['', 1989, L('Avant 1990', 'Before 1990')]];
 const ADV_DUR = {
-  movie: [['short', 'Moins de 1 h 30', { lte: 89 }], ['mid', '1 h 30 à 2 h', { gte: 90, lte: 120 }], ['long', 'Plus de 2 h', { gte: 121 }]],
-  tv: [['short', 'Épisodes courts', { lte: 35 }], ['long', 'Épisodes longs', { gte: 36 }]],
+  movie: [['short', L('Moins de 1 h 30', 'Under 1h30'), { lte: 89 }], ['mid', L('1 h 30 à 2 h', '1h30 to 2h'), { gte: 90, lte: 120 }], ['long', L('Plus de 2 h', 'Over 2h'), { gte: 121 }]],
+  tv: [['short', L('Épisodes courts', 'Short episodes'), { lte: 35 }], ['long', L('Épisodes longs', 'Long episodes'), { gte: 36 }]],
 };
-const ADV_LANGS = [['fr', 'Français'], ['en', 'Anglais'], ['ko', 'Coréen'], ['ja', 'Japonais'], ['es', 'Espagnol']];
-const ADV_SORTS = [['popularity.desc', 'Populaires'], ['vote_average.desc', 'Mieux notés'], ['date', 'Plus récents']];
+const ADV_LANGS = [['fr', L('Français', 'French')], ['en', L('Anglais', 'English')], ['ko', L('Coréen', 'Korean')], ['ja', L('Japonais', 'Japanese')], ['es', L('Espagnol', 'Spanish')]];
+const ADV_SORTS = [['popularity.desc', L('Populaires', 'Popular')], ['vote_average.desc', L('Mieux notés', 'Top rated')], ['date', L('Plus récents', 'Newest')]];
 const DAY_MS = 24 * 3600e3;
 const genresUrl = kind => tmdbUrl(`/genre/${kind}/list`);
 const providersUrl = kind => tmdbUrl(`/watch/providers/${kind}`, { watch_region: 'FR' });
@@ -859,12 +884,12 @@ function advChips(f) {
   const genres = useData(genresUrl(f.kind), DAY_MS).data?.genres || [];
   const provs = useData(providersUrl(f.kind), DAY_MS).data?.results || [];
   const chips = [];
-  for (const id of f.genres) chips.push(['genres', id, genres.find(g => g.id === id)?.name || 'Genre']);
-  if (f.from || f.to) chips.push(['years', '', f.from && f.to ? (f.from === f.to ? f.from : `${f.from}–${f.to}`) : f.from ? `Depuis ${f.from}` : `Jusqu’à ${f.to}`]);
+  for (const id of f.genres) chips.push(['genres', id, genres.find(g => g.id === id)?.name || L('Genre', 'Genre')]);
+  if (f.from || f.to) chips.push(['years', '', f.from && f.to ? (f.from === f.to ? f.from : `${f.from}–${f.to}`) : f.from ? L(`Depuis ${f.from}`, `Since ${f.from}`) : L(`Jusqu’à ${f.to}`, `Until ${f.to}`)]);
   if (f.dur) chips.push(['dur', '', ADV_DUR[f.kind].find(d => d[0] === f.dur)?.[1] || '']);
   if (f.person) chips.push(['person', '', f.person.name]);
   if (f.rating) chips.push(['rating', '', `★ ${fmtScore(f.rating)}+`]);
-  for (const id of f.providers) chips.push(['providers', id, provs.find(p => p.provider_id === id)?.provider_name || 'Plateforme']);
+  for (const id of f.providers) chips.push(['providers', id, provs.find(p => p.provider_id === id)?.provider_name || L('Plateforme', 'Platform')]);
   if (f.lang) chips.push(['lang', '', ADV_LANGS.find(l => l[0] === f.lang)?.[1] || f.lang]);
   if (f.sort !== 'popularity.desc') chips.push(['sort', '', ADV_SORTS.find(s => s[0] === f.sort)[1]]);
   return chips;
@@ -872,38 +897,38 @@ function advChips(f) {
 const advCount = () => ui.advOn ? advChips(ui.adv).filter(c => c[0] !== 'sort').length : 0;
 function advBtnHTML() {
   const n = advCount();
-  return `<button id="advBtn" class="filterbtn ${ui.advOn ? 'on' : ''}" data-act="adv-open" aria-label="Filtres${n ? ` (${n} actifs)` : ''}">${ICON.filter}<span>Filtres</span>${n ? `<b class="fcount">${n}</b>` : ''}</button>`;
+  return `<button id="advBtn" class="filterbtn ${ui.advOn ? 'on' : ''}" data-act="adv-open" aria-label="${L('Filtres', 'Filters')}${n ? L(` (${n} actifs)`, ` (${n} active)`) : ''}">${ICON.filter}<span>${L('Filtres', 'Filters')}</span>${n ? `<b class="fcount">${n}</b>` : ''}</button>`;
 }
 
 function advResultsHTML() {
   const f = ui.adv;
   const chips = `<div class="fchips">
-    <button class="fchip kind" data-act="adv-open">${f.kind === 'tv' ? 'Séries' : 'Films'}</button>
-    ${advChips(f).map(([k, v, label]) => `<button class="fchip" data-act="adv-drop" data-k="${k}" data-v="${v}" aria-label="Retirer le filtre ${esc(label)}">${esc(label)}${ICON.close}</button>`).join('')}
+    <button class="fchip kind" data-act="adv-open">${f.kind === 'tv' ? L('Séries', 'Shows') : L('Films', 'Movies')}</button>
+    ${advChips(f).map(([k, v, label]) => `<button class="fchip" data-act="adv-drop" data-k="${k}" data-v="${v}" aria-label="${L('Retirer le filtre', 'Remove filter')} ${esc(label)}">${esc(label)}${ICON.close}</button>`).join('')}
   </div>`;
   const items = [], ids = new Set();
   let first, more = false, status = '';
   if (f.person && f.kind === 'tv') {
     const r = personTv(f);
-    if (r.loading) status = spinner('Recherche…'); else if (r.error) status = errorBlock(r.error);
+    if (r.loading) status = spinner(L('Recherche…', 'Searching…')); else if (r.error) status = errorBlock(r.error);
     else { first = r.data; items.push(...r.data.results); }
   } else {
     for (let page = 1; page <= ui.advPages; page++) {
       const r = useData(tmdbUrl(`/discover/${f.kind}`, advParams(f, page)), 3600e3);
-      if (r.loading) { status = spinner('Recherche…'); break; }
+      if (r.loading) { status = spinner(L('Recherche…', 'Searching…')); break; }
       if (r.error) { status = errorBlock(r.error); break; }
       first = first || r.data;
       for (const x of r.data.results || []) if (!ids.has(x.id)) { ids.add(x.id); items.push(x); }
       more = page < Math.min(r.data.total_pages || 1, 500);
     }
   }
-  const head = `<div class="advhead"><b>${first ? plural(first.total_results || 0, 'résultat', 'résultats') : 'Filtres'}</b>
-    <button class="linkbtn" data-act="adv-clear">Effacer les filtres</button></div>`;
-  if (first && !items.length) return `${head}${chips}<div class="empty"><b>Aucun résultat</b><p>Essaie en retirant un filtre.</p></div>`;
+  const head = `<div class="advhead"><b>${first ? plural(first.total_results || 0, L('résultat', 'result'), L('résultats', 'results')) : L('Filtres', 'Filters')}</b>
+    <button class="linkbtn" data-act="adv-clear">${L('Effacer les filtres', 'Clear filters')}</button></div>`;
+  if (first && !items.length) return `${head}${chips}<div class="empty"><b>${L('Aucun résultat', 'No results')}</b><p>${L('Essaie en retirant un filtre.', 'Try removing a filter.')}</p></div>`;
   return `${head}${chips}
-    ${f.person && f.kind === 'tv' && (f.dur || f.providers.length) ? '<p class="muted small gap-top">Pour les séries d’une personne, la durée et les plateformes ne sont pas prises en compte.</p>' : ''}
+    ${f.person && f.kind === 'tv' && (f.dur || f.providers.length) ? `<p class="muted small gap-top">${L('Pour les séries d’une personne, la durée et les plateformes ne sont pas prises en compte.', 'For a person’s shows, length and platforms aren’t taken into account.')}</p>` : ''}
     ${items.length ? `<div class="grid gap-top">${items.map(x => tmdbTile(x, f.kind, true)).join('')}</div>` : ''}
-    ${status || (more ? `<button class="btn morebtn" data-act="adv-more">Voir plus</button>` : '')}`;
+    ${status || (more ? `<button class="btn morebtn" data-act="adv-more">${L('Voir plus', 'Show more')}</button>` : '')}`;
 }
 
 /* ----- Panneau des filtres ----- */
@@ -914,35 +939,35 @@ function sheetHTML() {
   const f = ui.advDraft, k = f.kind;
   const genres = mem.get(genresUrl(k))?.data?.genres;
   const provs = advProviders(mem.get(providersUrl(k))?.data);
-  const wait = '<div class="muted small">Chargement…</div>';
+  const wait = `<div class="muted small">${L('Chargement…', 'Loading…')}</div>`;
   return `<div class="askbox advsheet">
-    <div class="sheet-head"><h2 id="filters-title">Filtres</h2><button type="button" class="linkbtn" data-act="adv-reset">Réinitialiser</button>
-      <button type="button" class="sheet-x" data-act="adv-close" aria-label="Fermer les filtres">${ICON.close}</button></div>
+    <div class="sheet-head"><h2 id="filters-title">${L('Filtres', 'Filters')}</h2><button type="button" class="linkbtn" data-act="adv-reset">${L('Réinitialiser', 'Reset')}</button>
+      <button type="button" class="sheet-x" data-act="adv-close" aria-label="${L('Fermer les filtres', 'Close filters')}">${ICON.close}</button></div>
     <div class="sheet-body">
-      <div class="seg">${[['movie', 'Films'], ['tv', 'Séries']].map(([v, l]) => `<button type="button" data-act="adv-set" data-k="kind" data-v="${v}" aria-pressed="${k === v}">${l}</button>`).join('')}</div>
-      <h3>Genres</h3>
+      <div class="seg">${[['movie', L('Films', 'Movies')], ['tv', L('Séries', 'Shows')]].map(([v, l]) => `<button type="button" data-act="adv-set" data-k="kind" data-v="${v}" aria-pressed="${k === v}">${l}</button>`).join('')}</div>
+      <h3>${L('Genres', 'Genres')}</h3>
       <div class="pills">${genres ? genres.map(g => pill('adv-toggle', 'genres', g.id, g.name, f.genres.includes(g.id))).join('') : wait}</div>
-      <h3>Année de sortie</h3>
+      <h3>${L('Année de sortie', 'Release year')}</h3>
       <div class="pills">${ADV_PERIODS.map(([a, b, l]) => pill('adv-set', 'period', `${a}-${b}`, l, f.from === String(a) && f.to === String(b))).join('')}</div>
-      <div class="yrs"><input id="advFrom" class="input" type="number" inputmode="numeric" min="1900" max="${YEAR + 2}" placeholder="De" value="${esc(f.from)}" aria-label="À partir de l’année">
-        <span>à</span><input id="advTo" class="input" type="number" inputmode="numeric" min="1900" max="${YEAR + 2}" placeholder="À" value="${esc(f.to)}" aria-label="Jusqu’à l’année"></div>
-      <h3>Durée${k === 'tv' ? ' d’un épisode' : ''}</h3>
+      <div class="yrs"><input id="advFrom" class="input" type="number" inputmode="numeric" min="1900" max="${YEAR + 2}" placeholder="${L('De', 'From')}" value="${esc(f.from)}" aria-label="${L('À partir de l’année', 'From year')}">
+        <span>${L('à', 'to')}</span><input id="advTo" class="input" type="number" inputmode="numeric" min="1900" max="${YEAR + 2}" placeholder="${L('À', 'To')}" value="${esc(f.to)}" aria-label="${L('Jusqu’à l’année', 'Until year')}"></div>
+      <h3>${k === 'tv' ? L('Durée d’un épisode', 'Episode length') : L('Durée', 'Length')}</h3>
       <div class="pills">${ADV_DUR[k].map(([v, l]) => pill('adv-set', 'dur', v, l, f.dur === v)).join('')}</div>
-      <h3>Avec</h3>
+      <h3>${L('Avec', 'Starring')}</h3>
       ${f.person
-        ? `<div class="pills"><button type="button" class="pill person" data-act="adv-noperson" aria-pressed="true" aria-label="Retirer ${esc(f.person.name)}">${f.person.photo ? `<img src="${IMG}w185${esc(f.person.photo)}" alt="">` : ''}${esc(f.person.name)}${ICON.close}</button></div>
-           ${k === 'tv' ? '<p class="muted small">Pour les séries, on part de sa filmographie : la durée et les plateformes ne sont pas prises en compte.</p>' : ''}`
-        : `<input id="advPerson" class="input" type="search" autocomplete="off" enterkeyhint="search" placeholder="Un acteur, une réalisatrice…" aria-label="Chercher une personne"><div id="advPeople" class="people-res"></div>`}
-      <h3>Note TMDB minimale <b id="advRateTxt">${f.rating ? `★ ${fmtScore(f.rating)}+` : 'Toutes'}</b></h3>
-      <input id="advRate" class="range" type="range" min="0" max="9" step="0.5" value="${f.rating}" aria-label="Note minimale sur 10">
-      <h3>Plateformes</h3>
+        ? `<div class="pills"><button type="button" class="pill person" data-act="adv-noperson" aria-pressed="true" aria-label="${L('Retirer', 'Remove')} ${esc(f.person.name)}">${f.person.photo ? `<img src="${IMG}w185${esc(f.person.photo)}" alt="">` : ''}${esc(f.person.name)}${ICON.close}</button></div>
+           ${k === 'tv' ? `<p class="muted small">${L('Pour les séries, on part de sa filmographie : la durée et les plateformes ne sont pas prises en compte.', 'For shows, we start from their filmography: length and platforms aren’t taken into account.')}</p>` : ''}`
+        : `<input id="advPerson" class="input" type="search" autocomplete="off" enterkeyhint="search" placeholder="${L('Un acteur, une réalisatrice…', 'An actor, a director…')}" aria-label="${L('Chercher une personne', 'Search for a person')}"><div id="advPeople" class="people-res"></div>`}
+      <h3>${L('Note TMDB minimale', 'Minimum TMDB rating')} <b id="advRateTxt">${f.rating ? `★ ${fmtScore(f.rating)}+` : L('Toutes', 'Any')}</b></h3>
+      <input id="advRate" class="range" type="range" min="0" max="9" step="0.5" value="${f.rating}" aria-label="${L('Note minimale sur 10', 'Minimum rating out of 10')}">
+      <h3>${L('Plateformes', 'Platforms')}</h3>
       <div class="pills">${provs.length ? provs.map(p => pill('adv-toggle', 'providers', p.provider_id, p.provider_name, f.providers.includes(p.provider_id), p.logo_path ? `<img src="${IMG}w92${esc(p.logo_path)}" alt="">` : '')).join('') : wait}</div>
-      <h3>Langue d’origine</h3>
+      <h3>${L('Langue d’origine', 'Original language')}</h3>
       <div class="pills">${ADV_LANGS.map(([v, l]) => pill('adv-set', 'lang', v, l, f.lang === v)).join('')}</div>
-      <h3>Trier par</h3>
+      <h3>${L('Trier par', 'Sort by')}</h3>
       <div class="pills">${ADV_SORTS.map(([v, l]) => pill('adv-set', 'sort', v, l, f.sort === v)).join('')}</div>
     </div>
-    <div class="sheet-foot"><button type="button" class="btn primary" data-act="adv-apply">Voir les résultats</button></div>
+    <div class="sheet-foot"><button type="button" class="btn primary" data-act="adv-apply">${L('Voir les résultats', 'Show results')}</button></div>
   </div>`;
 }
 // Redessine seulement le contenu du panneau : le cadre reste en place (pas d'animation rejouée)
@@ -980,23 +1005,23 @@ function searchPeople(q) {
     const out = document.getElementById('advPeople');
     if (!out || document.getElementById('advPerson')?.value !== q) return;
     const people = (r?.results || []).slice(0, 6);
-    const JOB = { Acting: 'Acteur, actrice', Directing: 'Réalisation', Writing: 'Scénario', Production: 'Production' };
+    const JOB = L({ Acting: 'Acteur, actrice', Directing: 'Réalisation', Writing: 'Scénario', Production: 'Production' }, { Acting: 'Acting', Directing: 'Directing', Writing: 'Writing', Production: 'Production' });
     out.innerHTML = r ? (people.length ? people.map(p => `<button type="button" class="person-row" data-act="adv-person" data-id="${p.id}" data-name="${esc(p.name)}" data-photo="${esc(p.profile_path || '')}">
         <span class="person-ph">${p.profile_path ? `<img src="${IMG}w185${esc(p.profile_path)}" alt="" loading="lazy">` : esc(p.name.charAt(0))}</span>
         <span class="min0"><b>${esc(p.name)}</b><span class="muted small">${esc([JOB[p.known_for_department] || p.known_for_department, (p.known_for || []).slice(0, 2).map(x => x.title || x.name).join(', ')].filter(Boolean).join(' · '))}</span></span>
-      </button>`).join('') : '<div class="muted small">Aucune personne trouvée.</div>') : '<div class="muted small">Recherche impossible pour l’instant.</div>';
+      </button>`).join('') : `<div class="muted small">${L('Aucune personne trouvée.', 'Nobody found.')}</div>`) : `<div class="muted small">${L('Recherche impossible pour l’instant.', 'Search isn’t available right now.')}</div>`;
   }, 300);
 }
 
 // Chargement : des formes grises qui scintillent à la place du contenu (le rond qui tourne reste pour les recherches).
 const spinner = (txt = '') => txt ? `<div class="loading"><div class="spinner"></div>${esc(txt)}</div>`
-  : `<div class="skel" role="status" aria-label="Chargement…">${'<div class="skel-row"><i class="sk-pic"></i><div class="sk-lines"><i></i><i class="short"></i></div></div>'.repeat(3)}</div>`;
-const skelRail = () => `<div class="rail skel" role="status" aria-label="Chargement…">${'<i class="sk-poster"></i>'.repeat(4)}</div>`;
+  : `<div class="skel" role="status" aria-label="${L('Chargement…', 'Loading…')}">${'<div class="skel-row"><i class="sk-pic"></i><div class="sk-lines"><i></i><i class="short"></i></div></div>'.repeat(3)}</div>`;
+const skelRail = () => `<div class="rail skel" role="status" aria-label="${L('Chargement…', 'Loading…')}">${'<i class="sk-poster"></i>'.repeat(4)}</div>`;
 function errorBlock(msg) {
-  return `<div class="empty"><b class="err">${esc(msg)}</b><button class="btn" data-act="retry">Réessayer</button></div>`;
+  return `<div class="empty"><b class="err">${esc(msg)}</b><button class="btn" data-act="retry">${L('Réessayer', 'Try again')}</button></div>`;
 }
-const backBtn = () => `<button class="backbtn" data-act="back" aria-label="Retour">${ICON.back}</button>`;
-const loadingView = () => `${backBtn()}<div class="pt-hero skel-hero" role="status" aria-label="Chargement…"><i class="sk-poster"></i><div class="sk-lines"><i></i><i></i><i class="short"></i></div></div>`;
+const backBtn = () => `<button class="backbtn" data-act="back" aria-label="${L('Retour', 'Back')}">${ICON.back}</button>`;
+const loadingView = () => `${backBtn()}<div class="pt-hero skel-hero" role="status" aria-label="${L('Chargement…', 'Loading…')}"><i class="sk-poster"></i><div class="sk-lines"><i></i><i></i><i class="short"></i></div></div>`;
 const errorView = msg => `${backBtn()}<div class="pt-hero">${errorBlock(msg)}</div>`;
 
 /* ================= Fiches : éléments communs ================= */
@@ -1014,7 +1039,7 @@ function overviewBlock(key, text) {
   if (!text) return '';
   const open = ui.expanded[key];
   return `<p class="overview ${open || text.length < 260 ? '' : 'clamp'}">${esc(text)}</p>
-    ${text.length >= 260 ? `<button class="linkbtn" data-act="expand" data-key="${key}">${open ? 'Réduire' : 'Lire la suite'}</button>` : ''}`;
+    ${text.length >= 260 ? `<button class="linkbtn" data-act="expand" data-key="${key}">${open ? L('Réduire', 'Show less') : L('Lire la suite', 'Read more')}</button>` : ''}`;
 }
 
 function genresBlock(d) {
@@ -1022,7 +1047,7 @@ function genresBlock(d) {
 }
 
 // « Où regarder » en France, d'après JustWatch (via TMDB) : juste l'info, sans lien.
-const PROVIDER_GROUPS = [[['flatrate'], 'Streaming'], [['free', 'ads'], 'Gratuit'], [['rent', 'buy'], 'Location ou achat']];
+const PROVIDER_GROUPS = [[['flatrate'], 'Streaming'], [['free', 'ads'], L('Gratuit', 'Free')], [['rent', 'buy'], L('Location ou achat', 'Rent or buy')]];
 // Variantes d'une même plateforme (offre avec pub, chaîne vendue via Amazon/Apple…) : on garde la plateforme principale.
 const PROVIDER_VARIANT = /\s+(standard with ads|with ads|amazon channel|apple tv channel|roku premium channel)$/i;
 function providersBlock(kind, id) {
@@ -1044,9 +1069,9 @@ function providersBlock(kind, id) {
       `<span class="prov">${p.logo_path ? `<img src="${IMG}w92${esc(p.logo_path)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : ''}<span>${esc(p.provider_name.replace(PROVIDER_VARIANT, ''))}</span></span>`).join('')}${more > 0 ? `<span class="prov more">+${more}</span>` : ''}</div></div>`;
   }).join('');
   return `<section class="pad providers">
-    <h2>Où regarder</h2>
-    ${rows || '<p class="muted">Pas disponible en France pour l’instant.</p>'}
-    <p class="fine">Source : JustWatch</p>
+    <h2>${L('Où regarder', 'Where to watch')}</h2>
+    ${rows || `<p class="muted">${L('Pas disponible en France pour l’instant.', 'Not available in France yet.')}</p>`}
+    <p class="fine">${L('Source : JustWatch', 'Source: JustWatch')}</p>
   </section>`;
 }
 
@@ -1055,7 +1080,7 @@ function providersBlock(kind, id) {
 function recoBtn(kind, id, small = false) {
   const r = useData('/api/recos', 30e3);
   const on = !!r.data?.mine?.some(m => m.kind === kind && m.id === Number(id));
-  const text = on ? 'Conseillé' : 'Conseiller';
+  const text = on ? L('Conseillé', 'Recommended') : L('Conseiller', 'Recommend');
   return `<button class="btn ${small ? 'small' : ''} ${on ? 'on' : ''}" data-act="reco-toggle" data-kind="${kind}" data-id="${id}" aria-pressed="${on}">${on ? ICON.check : ICON.send} ${text}</button>`;
 }
 
@@ -1066,7 +1091,7 @@ function repliesBlock(rv, kind, id, s, e, users) {
   const replies = rv.replies || [];
   const open = ui.openReplies.has(rk);
   const toggle = `<button type="button" class="replies-toggle ${open ? 'open' : ''}" data-act="replies-toggle" data-rk="${rk}" aria-expanded="${open}">
-    ${ICON.chevron}<span>${replies.length ? plural(replies.length, 'réponse', 'réponses') : 'Répondre'}</span></button>`;
+    ${ICON.chevron}<span>${replies.length ? plural(replies.length, L('réponse', 'reply'), L('réponses', 'replies')) : L('Répondre', 'Reply')}</span></button>`;
   if (!open) return `<div class="replies">${toggle}</div>`;
   const who = uid => users[uid] || (uid === me.id ? me : null);
   const list = replies.map(r => {
@@ -1074,15 +1099,15 @@ function repliesBlock(rv, kind, id, s, e, users) {
     if (!u) return '';
     return `<div class="reply">${avatar(u, 'sm')}<div class="min0">
       <div class="reply-head"><b>${esc(u.name)}</b><span class="muted">${timeAgo(r.at)}</span>
-        ${r.userId === me.id ? `<button type="button" class="linkbtn" data-act="reply-delete" data-rid="${r.id}">Effacer</button>` : ''}</div>
+        ${r.userId === me.id ? `<button type="button" class="linkbtn" data-act="reply-delete" data-rid="${r.id}">${L('Effacer', 'Delete')}</button>` : ''}</div>
       <p>${esc(r.text)}</p></div></div>`;
   }).join('');
   const draft = ui.replyDrafts[rk] || '';
   return `<div class="replies">${toggle}
     <div class="reply-list">${list}
       <div class="reply-box">
-        <textarea class="input" rows="1" maxlength="1000" data-reply="${rk}" placeholder="Ta réponse…" aria-label="Ta réponse">${esc(draft)}</textarea>
-        <button type="button" class="btn small primary" data-act="reply-send" data-rk="${rk}" ${draft.trim() ? '' : 'disabled'}>Envoyer</button>
+        <textarea class="input" rows="1" maxlength="1000" data-reply="${rk}" placeholder="${L('Ta réponse…', 'Your reply…')}" aria-label="${L('Ta réponse', 'Your reply')}">${esc(draft)}</textarea>
+        <button type="button" class="btn small primary" data-act="reply-send" data-rk="${rk}" ${draft.trim() ? '' : 'disabled'}>${L('Envoyer', 'Send')}</button>
       </div>
     </div></div>`;
 }
@@ -1090,8 +1115,8 @@ function repliesBlock(rv, kind, id, s, e, users) {
 function reviewsSection(kind, id, s = 0, e = 0) {
   const url = `/api/title/${kind}/${id}` + (kind === 'ep' ? `?s=${s}&e=${e}` : '');
   const r = useData(url, 30e3);
-  if (r.loading) return `<div class="pad"><h2>Avis</h2>${spinner()}</div>`;
-  if (r.error) return `<div class="pad"><h2>Avis</h2><p class="err">${esc(r.error)}</p></div>`;
+  if (r.loading) return `<div class="pad"><h2>${L('Avis', 'Reviews')}</h2>${spinner()}</div>`;
+  if (r.error) return `<div class="pad"><h2>${L('Avis', 'Reviews')}</h2><p class="err">${esc(r.error)}</p></div>`;
   const { mine, reviews, activity, users } = r.data;
   const dk = `${kind}:${id}:${s}:${e}`;
   const draft = ui.drafts[dk];
@@ -1099,9 +1124,9 @@ function reviewsSection(kind, id, s = 0, e = 0) {
   let friendsLine = '';
   if (activity.length) {
     const label = a => {
-      if (kind === 'tv') return a.archived ? 'a abandonné' : plural(a.watchedCount, 'épisode vu', 'épisodes vus');
-      if (kind === 'movie') return a.status === 'watched' ? 'l’a vu' : 'veut le voir';
-      return 'l’a vu';
+      if (kind === 'tv') return a.archived ? L('a abandonné', 'dropped it') : L(plural(a.watchedCount, 'épisode vu', 'épisodes vus'), plural(a.watchedCount, 'episode watched', 'episodes watched'));
+      if (kind === 'movie') return a.status === 'watched' ? L('l’a vu', 'saw it') : L('veut le voir', 'wants to see it');
+      return L('l’a vu', 'saw it');
     };
     friendsLine = `<div class="friends-act">${activity.map(a => users[a.userId] ? `<a class="fchip" href="#/user/${a.userId}">${avatar(users[a.userId], 'sm')}<span><b>${esc(users[a.userId].name)}</b> ${esc(label(a))}</span></a>` : '').join('')}</div>`;
   }
@@ -1109,20 +1134,20 @@ function reviewsSection(kind, id, s = 0, e = 0) {
   let composer;
   if (mine && !draft) {
     composer = `<div class="review mine">
-      <div class="review-head">${avatar(me, 'sm')}<b>Ton avis</b>${stars(mine.rating)}<span class="muted">${timeAgo(mine.at)}</span></div>
+      <div class="review-head">${avatar(me, 'sm')}<b>${L('Ton avis', 'Your review')}</b>${stars(mine.rating)}<span class="muted">${timeAgo(mine.at)}</span></div>
       ${mine.text ? `<p>${esc(mine.text)}</p>` : ''}
-      <div class="row"><button class="btn small" data-act="review-edit" data-dk="${dk}" data-url="${esc(url)}">Modifier</button>
-      <button class="btn small danger" data-act="review-delete" data-dk="${dk}" data-url="${esc(url)}">Supprimer</button></div>
+      <div class="row"><button class="btn small" data-act="review-edit" data-dk="${dk}" data-url="${esc(url)}">${L('Modifier', 'Edit')}</button>
+      <button class="btn small danger" data-act="review-delete" data-dk="${dk}" data-url="${esc(url)}">${L('Supprimer', 'Delete')}</button></div>
       ${repliesBlock(mine, kind, id, s, e, users)}
     </div>`;
   } else {
     const d = draft || { rating: null, text: '' };
     composer = `<div class="composer">
-      <div class="star-input" role="group" aria-label="Ta note">${[1, 2, 3, 4, 5].map(n =>
-        `<button type="button" class="star-btn ${d.rating >= n ? 'on' : ''}" data-act="star" data-dk="${dk}" data-n="${n}" aria-label="${n} sur 5" aria-pressed="${d.rating === n}">★</button>`).join('')}</div>
-      <textarea class="input" id="rv-${dk.replace(/:/g, '-')}" data-draft="${dk}" rows="2" maxlength="2000" placeholder="${kind === 'ep' ? 'Ton avis sur cet épisode…' : 'Ton avis, pour tes amis…'}">${esc(d.text)}</textarea>
-      <div class="row"><button class="btn primary small" data-act="review-save" data-dk="${dk}" data-url="${esc(url)}" ${d.rating || d.text.trim() ? '' : 'disabled'}>Publier</button>
-      ${draft && mine ? `<button class="btn small" data-act="review-cancel" data-dk="${dk}">Annuler</button>` : ''}</div>
+      <div class="star-input" role="group" aria-label="${L('Ta note', 'Your rating')}">${[1, 2, 3, 4, 5].map(n =>
+        `<button type="button" class="star-btn ${d.rating >= n ? 'on' : ''}" data-act="star" data-dk="${dk}" data-n="${n}" aria-label="${L(`${n} sur 5`, `${n} out of 5`)}" aria-pressed="${d.rating === n}">★</button>`).join('')}</div>
+      <textarea class="input" id="rv-${dk.replace(/:/g, '-')}" data-draft="${dk}" rows="2" maxlength="2000" placeholder="${kind === 'ep' ? L('Ton avis sur cet épisode…', 'Your take on this episode…') : L('Ton avis, pour tes amis…', 'Your review, for your friends…')}">${esc(d.text)}</textarea>
+      <div class="row"><button class="btn primary small" data-act="review-save" data-dk="${dk}" data-url="${esc(url)}" ${d.rating || d.text.trim() ? '' : 'disabled'}>${L('Publier', 'Post')}</button>
+      ${draft && mine ? `<button class="btn small" data-act="review-cancel" data-dk="${dk}">${L('Annuler', 'Cancel')}</button>` : ''}</div>
     </div>`;
   }
 
@@ -1137,17 +1162,17 @@ function reviewsSection(kind, id, s = 0, e = 0) {
   }).join('');
 
   return `<div class="pad">
-    ${friendsLine ? `<h2>Tes amis</h2>${friendsLine}` : ''}
-    <h2>Avis <small>${reviews.length + (mine ? 1 : 0) || ''}</small></h2>
+    ${friendsLine ? `<h2>${L('Tes amis', 'Your friends')}</h2>${friendsLine}` : ''}
+    <h2>${L('Avis', 'Reviews')} <small>${reviews.length + (mine ? 1 : 0) || ''}</small></h2>
     ${composer}
-    ${list || '<p class="muted gap-top">Aucun ami n’a encore donné son avis.</p>'}
+    ${list || `<p class="muted gap-top">${L('Aucun ami n’a encore donné son avis.', 'None of your friends has reviewed it yet.')}</p>`}
   </div>`;
 }
 
 function similarRail(kind, id) {
   const r = useData(tmdbUrl(`/${kind}/${id}/recommendations`), 3600e3);
   if (r.data && !(r.data.results || []).length) return '';
-  return `<div class="pad"><h2>Dans le même esprit</h2>${rail(r, kind)}</div>`;
+  return `<div class="pad"><h2>${L('Dans le même esprit', 'More like this')}</h2>${rail(r, kind)}</div>`;
 }
 
 /* ================= Fiche série ================= */
@@ -1165,12 +1190,12 @@ function viewTv(id) {
     const armed = ui.confirm === 'untrack:' + id;
     actions = `<div class="actions pad">
       ${recoBtn('tv', id, true)}
-      <button class="btn small" data-act="archive" data-id="${id}">${sh.archived ? 'Reprendre' : 'Abandonner'}</button>
-      <button class="btn small danger ${armed ? 'armed' : ''}" data-act="untrack" data-id="${id}">${armed ? 'Tout effacer ?' : 'Retirer'}</button>
+      <button class="btn small" data-act="archive" data-id="${id}">${sh.archived ? L('Reprendre', 'Resume') : L('Abandonner', 'Drop')}</button>
+      <button class="btn small danger ${armed ? 'armed' : ''}" data-act="untrack" data-id="${id}">${armed ? L('Tout effacer ?', 'Erase everything?') : L('Retirer', 'Remove')}</button>
     </div>`;
   } else {
     actions = `<div class="actions pad">
-      <button class="btn primary grow" data-act="track" data-id="${id}">${ICON.plus} Suivre</button>
+      <button class="btn primary grow" data-act="track" data-id="${id}">${ICON.plus} ${L('Suivre', 'Follow')}</button>
       ${recoBtn('tv', id)}
     </div>`;
   }
@@ -1181,9 +1206,9 @@ function viewTv(id) {
   if (sh) {
     const p = progress(base);
     const pct = p.aired ? Math.round(p.watched / p.aired * 100) : 0;
-    const nextTxt = p.next ? `Prochain : <b>${code(p.next.s, p.next.e)}</b>` : (base.next ? `Prochain épisode : ${esc(relDay(base.next.d)).toLowerCase()}` : 'À jour');
+    const nextTxt = p.next ? `${L('Prochain :', 'Next:')} <b>${code(p.next.s, p.next.e)}</b>` : (base.next ? `${L('Prochain épisode :', 'Next episode:')} ${esc(relDay(base.next.d)).toLowerCase()}` : L('À jour', 'Up to date'));
     prog = `<div class="progress pad">
-      <div class="progress-row"><span><b>${p.watched}</b> / ${p.aired} épisodes vus</span><span>${nextTxt}</span></div>
+      <div class="progress-row"><span><b>${p.watched}</b> / ${p.aired} ${L('épisodes vus', 'episodes watched')}</span><span>${nextTxt}</span></div>
       <div class="bar"><i style="width:${pct}%"></i></div>
     </div>`;
   }
@@ -1195,7 +1220,7 @@ function viewTv(id) {
   return `${hero(base.backdrop, base.poster, base.name, meta)}
     ${prog}${actions}${suggestedBy('tv', id)}${genresBlock(d)}${providersBlock('tv', id)}
     <div class="pad">${overviewBlock('tv' + id, d?.overview)}</div>
-    <div class="pad"><h2>Saisons <small>${base.seasons.length}</small></h2>${seasons || '<p class="muted">Aucun épisode annoncé.</p>'}</div>
+    <div class="pad"><h2>${L('Saisons', 'Seasons')} <small>${base.seasons.length}</small></h2>${seasons || `<p class="muted">${L('Aucun épisode annoncé.', 'No episodes announced.')}</p>`}</div>
     ${reviewsSection('tv', id)}
     ${similarRail('tv', id)}`;
 }
@@ -1213,26 +1238,26 @@ function seasonBlock(base, tracked, se) {
     const list = r.data?.episodes?.length
       ? r.data.episodes.filter(x => x.episode_number <= se.c)
       : Array.from({ length: se.c }, (_, i) => ({ episode_number: i + 1 }));
-    eps = `<ol class="eps">${r.loading ? `<li class="ep"><span class="ep-date">Chargement des épisodes…</span></li>` : ''}${list.map(x => {
+    eps = `<ol class="eps">${r.loading ? `<li class="ep"><span class="ep-date">${L('Chargement des épisodes…', 'Loading episodes…')}</span></li>` : ''}${list.map(x => {
       const e = x.episode_number;
       const aired = isAired(base, se.n, e);
       const seen = !!base.watched[epKey(se.n, e)];
       const bits = [];
-      if (x.air_date) bits.push(aired || dayDiff(x.air_date) < 0 ? longDate(x.air_date) : 'Diffusion ' + relDay(x.air_date).toLowerCase());
+      if (x.air_date) bits.push(aired || dayDiff(x.air_date) < 0 ? longDate(x.air_date) : L('Diffusion ', 'Airs ') + relDay(x.air_date).toLowerCase());
       if (x.runtime) bits.push(x.runtime + ' min');
       return `<li class="ep ${aired ? '' : 'future'} ${seen ? 'seen' : ''}">
         <a class="ep-main" href="#/ep/${base.id}/${se.n}/${e}"><span class="ep-num">E${pad(e)}</span>
-          <div class="min0"><div class="ep-title">${esc(x.name || 'Épisode ' + e)}</div>${bits.length ? `<div class="ep-date">${esc(bits.join(' · '))}</div>` : ''}</div></a>
-        <button class="tick ${seen ? 'on' : ''}" data-act="ep" data-id="${base.id}" data-s="${se.n}" data-e="${e}" ${aired ? '' : 'disabled'} aria-pressed="${seen}" aria-label="${code(se.n, e)} ${seen ? 'vu' : 'pas vu'}">${ICON.check}</button>
+          <div class="min0"><div class="ep-title">${esc(x.name || L('Épisode ', 'Episode ') + e)}</div>${bits.length ? `<div class="ep-date">${esc(bits.join(' · '))}</div>` : ''}</div></a>
+        <button class="tick ${seen ? 'on' : ''}" data-act="ep" data-id="${base.id}" data-s="${se.n}" data-e="${e}" ${aired ? '' : 'disabled'} aria-pressed="${seen}" aria-label="${code(se.n, e)} ${seen ? L('vu', 'watched') : L('pas vu', 'not watched')}">${ICON.check}</button>
       </li>`;
     }).join('')}</ol>`;
   }
   return `<section class="season ${open ? 'open' : ''}">
     <div class="season-head">
       <button class="season-toggle" data-act="season" data-id="${base.id}" data-n="${se.n}" aria-expanded="${open}">
-        <b>Saison ${se.n}</b><small>${seenCount}/${airedCount || se.c}</small>${ICON.chevron}
+        <b>${L('Saison', 'Season')} ${se.n}</b><small>${seenCount}/${airedCount || se.c}</small>${ICON.chevron}
       </button>
-      <button class="tick ${done ? 'on' : ''}" data-act="season-all" data-id="${base.id}" data-n="${se.n}" ${airedCount ? '' : 'disabled'} aria-label="${done ? 'Décocher' : 'Cocher'} toute la saison ${se.n}">${ICON.check}</button>
+      <button class="tick ${done ? 'on' : ''}" data-act="season-all" data-id="${base.id}" data-n="${se.n}" ${airedCount ? '' : 'disabled'} aria-label="${done ? L(`Décocher toute la saison ${se.n}`, `Untick all of season ${se.n}`) : L(`Cocher toute la saison ${se.n}`, `Tick all of season ${se.n}`)}">${ICON.check}</button>
     </div>${eps}
   </section>`;
 }
@@ -1261,12 +1286,12 @@ function viewEp(id, s, e) {
     </div>
     <div class="pad">
       <a class="ep-show" href="#/tv/${id}">${esc(base.name)}</a>
-      <h1 class="ep-h1"><span class="code">${code(s, e)}</span> ${esc(ep.name || 'Épisode ' + e)}</h1>
+      <h1 class="ep-h1"><span class="code">${code(s, e)}</span> ${esc(ep.name || L('Épisode ', 'Episode ') + e)}</h1>
       ${meta ? `<div class="hero-meta">${esc(meta)}</div>` : ''}
       <div class="actions">
         ${aired
-          ? `<button class="btn grow ${seen ? 'primary' : ''}" data-act="ep" data-id="${id}" data-s="${s}" data-e="${e}" aria-pressed="${seen}">${ICON.check} ${seen ? 'Vu' : 'Marquer comme vu'}</button>`
-          : `<span class="chip">${ep.air_date ? 'Diffusion ' + esc(relDay(ep.air_date).toLowerCase()) : 'Pas encore diffusé'}</span>`}
+          ? `<button class="btn grow ${seen ? 'primary' : ''}" data-act="ep" data-id="${id}" data-s="${s}" data-e="${e}" aria-pressed="${seen}">${ICON.check} ${seen ? L('Vu', 'Watched') : L('Marquer comme vu', 'Mark as watched')}</button>`
+          : `<span class="chip">${ep.air_date ? L('Diffusion ', 'Airs ') + esc(relDay(ep.air_date).toLowerCase()) : L('Pas encore diffusé', 'Not aired yet')}</span>`}
       </div>
       ${overviewBlock(`ep${id}-${s}-${e}`, ep.overview)}
       <div class="epnav">
@@ -1289,17 +1314,17 @@ function viewMovie(id) {
   const meta = [
     (release || m?.year || '').slice(0, 4),
     runtime ? fmtDuration(runtime) : '',
-    dayDiff(release) > 0 ? 'Sortie le ' + longDate(release) : '',
+    dayDiff(release) > 0 ? L('Sortie le ', 'Out ') + longDate(release) : '',
   ].filter(Boolean).map(esc).join(' · ') + scoreLine(d);
   const inList = m?.status === 'watchlist', seen = m?.status === 'watched';
   return `${hero(d?.backdrop_path || m?.backdrop, d?.poster_path || m?.poster, title, meta)}
     <div class="actions pad">
-      ${seen ? '' : `<button class="btn grow ${inList ? 'primary' : ''}" data-act="m-list" data-id="${id}" aria-pressed="${inList}">${inList ? ICON.check : ICON.bookmark} À voir</button>`}
-      <button class="btn grow ${seen ? 'primary' : ''}" data-act="m-seen" data-id="${id}" aria-pressed="${seen}">${ICON.check} ${seen ? 'Vu' : 'J’ai vu'}</button>
+      ${seen ? '' : `<button class="btn grow ${inList ? 'primary' : ''}" data-act="m-list" data-id="${id}" aria-pressed="${inList}">${inList ? ICON.check : ICON.bookmark} ${L('À voir', 'To watch')}</button>`}
+      <button class="btn grow ${seen ? 'primary' : ''}" data-act="m-seen" data-id="${id}" aria-pressed="${seen}">${ICON.check} ${seen ? L('Vu', 'Watched') : L('J’ai vu', 'Seen it')}</button>
       ${recoBtn('movie', id)}
     </div>
     ${quizBlock('movie', id)}
-    ${seen && m.watchedAt ? `<div class="pad muted">Vu le ${new Date(m.watchedAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</div>` : ''}
+    ${seen && m.watchedAt ? `<div class="pad muted">${L('Vu le', 'Watched on')} ${new Date(m.watchedAt).toLocaleDateString(LOC, { day: 'numeric', month: 'long', year: 'numeric' })}</div>` : ''}
     ${suggestedBy('movie', id)}
     ${genresBlock(d)}
     ${providersBlock('movie', id)}
@@ -1318,15 +1343,15 @@ function viewAmis() {
   let body;
   if (r.loading) body = spinner();
   else if (r.error) body = errorBlock(r.error);
-  else if (!groups.length) body = `<div class="empty"><b>Aucun groupe pour l’instant</b>
-      <p>Crée un groupe pour tes potes, ta famille ou tes collègues, puis invite-les avec un lien. Tu verras ici ce qu’ils regardent.</p>
-      <button class="btn primary" data-act="group-new">${ICON.plus} Créer un groupe</button></div>`;
-  else body = `${tabs('amisTab', ui.amisTab, [['feed', 'Activité'], ['friends', 'Membres'], ['groups', 'Groupes'], ['games', `Jeux${badges.quiz || badges.duels ? '<i class="tabmark" aria-label="à jouer"></i>' : ''}`]])}
+  else if (!groups.length) body = `<div class="empty"><b>${L('Aucun groupe pour l’instant', 'No groups yet')}</b>
+      <p>${L('Crée un groupe pour tes potes, ta famille ou tes collègues, puis invite-les avec un lien. Tu verras ici ce qu’ils regardent.', 'Create a group for your friends, family or coworkers, then invite them with a link. You’ll see what they’re watching here.')}</p>
+      <button class="btn primary" data-act="group-new">${ICON.plus} ${L('Créer un groupe', 'Create a group')}</button></div>`;
+  else body = `${tabs('amisTab', ui.amisTab, [['feed', L('Activité', 'Activity')], ['friends', L('Membres', 'Members')], ['groups', L('Groupes', 'Groups')], ['games', `${L('Jeux', 'Games')}${badges.quiz || badges.duels ? `<i class="tabmark" aria-label="${L('à jouer', 'to play')}"></i>` : ''}`]])}
     ${ui.amisTab === 'friends' ? membersHTML(r.data, cur) : ui.amisTab === 'groups' ? groupsTabHTML(r.data) : ui.amisTab === 'games' ? gamesHTML(cur) : feedHTML(cur)}`;
   return `<div class="pad">
-    <header class="top"><h1>Amis</h1></header>
+    <header class="top"><h1>${L('Amis', 'Friends')}</h1></header>
     ${groups.length ? `<div class="gchips">
-      <button class="gchip" data-act="group-pick" data-id="all" aria-pressed="${!cur}">Tous</button>
+      <button class="gchip" data-act="group-pick" data-id="all" aria-pressed="${!cur}">${L('Tous', 'All')}</button>
       ${groups.map(g => `<button class="gchip" data-act="group-pick" data-id="${g.id}" aria-pressed="${cur?.id === g.id}">${esc(g.emoji)} ${esc(g.name)}</button>`).join('')}
     </div>` : ''}
     ${body}
@@ -1334,20 +1359,20 @@ function viewAmis() {
 }
 // Onglet Groupes : tous mes groupes en cartes, avec de quoi inviter et les régler.
 function groupsTabHTML({ groups, users }) {
-  return `<button class="btn primary wide gap-top" data-act="group-new">${ICON.plus} Créer un groupe</button>
+  return `<button class="btn primary wide gap-top" data-act="group-new">${ICON.plus} ${L('Créer un groupe', 'Create a group')}</button>
     <div class="gcards">${groups.map(g => {
       const others = g.members.filter(id => id !== me.id && users[id]);
-      const boss = g.createdBy === me.id ? 'toi' : users[g.createdBy]?.name;
+      const boss = g.createdBy === me.id ? L('toi', 'you') : users[g.createdBy]?.name;
       return `<div class="gcard">
         <button class="gcard-main" data-act="group-open" data-id="${g.id}">
           <span class="gemoji">${esc(g.emoji)}</span>
-          <span class="min0"><b>${esc(g.name)}</b><span class="muted small">${plural(g.members.length, 'membre', 'membres')}${boss ? ` · créé par ${esc(boss)}` : ''}</span></span>
+          <span class="min0"><b>${esc(g.name)}</b><span class="muted small">${plural(g.members.length, L('membre', 'member'), L('membres', 'members'))}${boss ? ` · ${L('créé par', 'created by')} ${esc(boss)}` : ''}</span></span>
           ${others.length ? `<span class="avs">${others.slice(0, 4).map(id => avatar(users[id], 'sm')).join('')}${others.length > 4 ? `<span class="av sm more">+${others.length - 4}</span>` : ''}</span>` : ''}
         </button>
         <div class="gcard-actions">
-          <button class="btn small grow" data-act="invite" data-id="${g.id}">${ICON.send} Inviter</button>
-          <button class="btn small danger" data-act="grp-leave" data-id="${g.id}">Quitter</button>
-          <button class="btn small iconbtn" data-act="group-edit" data-id="${g.id}" aria-label="Réglages de ${esc(g.name)}">${ICON.gear}</button>
+          <button class="btn small grow" data-act="invite" data-id="${g.id}">${ICON.send} ${L('Inviter', 'Invite')}</button>
+          <button class="btn small danger" data-act="grp-leave" data-id="${g.id}">${L('Quitter', 'Leave')}</button>
+          <button class="btn small iconbtn" data-act="group-edit" data-id="${g.id}" aria-label="${L('Réglages de', 'Settings for')} ${esc(g.name)}">${ICON.gear}</button>
         </div>
       </div>`;
     }).join('')}</div>`;
@@ -1359,31 +1384,31 @@ function membersHTML({ groups, users }, cur) {
   if (!cur) {
     // Tous mes groupes : chaque personne une fois, avec les emojis des groupes qu'on partage.
     const ids = [...new Set(groups.flatMap(g => g.members))].filter(id => id !== me.id && users[id])
-      .sort((a, b) => users[a].name.localeCompare(users[b].name, 'fr'));
-    return `<button class="btn primary wide gap-top" data-act="invite">${ICON.send} Inviter avec un lien</button>
-      <h2>Tes amis <small>${ids.length}</small></h2>
+      .sort((a, b) => users[a].name.localeCompare(users[b].name, LANG));
+    return `<button class="btn primary wide gap-top" data-act="invite">${ICON.send} ${L('Inviter avec un lien', 'Invite with a link')}</button>
+      <h2>${L('Tes amis', 'Your friends')} <small>${ids.length}</small></h2>
       ${ids.length ? `<div class="people">${ids.map(id => personRow(users[id],
         `<span class="gtags">${groups.filter(g => g.members.includes(id)).map(g => `<span title="${esc(g.name)}">${esc(g.emoji)}</span>`).join('')}</span>`, `#/user/${id}`)).join('')}</div>`
-        : '<p class="muted">Personne pour l’instant : invite tes amis dans un de tes groupes.</p>'}
-      <p class="muted small gap-top">Pour ajouter quelqu’un qui est déjà sur l’appli, choisis un groupe en haut.</p>`;
+        : `<p class="muted">${L('Personne pour l’instant : invite tes amis dans un de tes groupes.', 'Nobody yet: invite your friends into one of your groups.')}</p>`}
+      <p class="muted small gap-top">${L('Pour ajouter quelqu’un qui est déjà sur l’appli, choisis un groupe en haut.', 'To add someone who’s already on the app, pick a group above.')}</p>`;
   }
   const boss = cur.createdBy === me.id;
   const ids = [me.id, ...cur.members.filter(id => id !== me.id && users[id])];
   return `<div class="ghead">
       <span class="gemoji">${esc(cur.emoji)}</span>
-      <div class="min0"><b>${esc(cur.name)}</b><div class="muted small">${plural(cur.members.length, 'membre', 'membres')}</div></div>
-      <button class="btn small iconbtn" data-act="group-edit" data-id="${cur.id}" aria-label="Réglages du groupe">${ICON.gear}</button>
+      <div class="min0"><b>${esc(cur.name)}</b><div class="muted small">${plural(cur.members.length, L('membre', 'member'), L('membres', 'members'))}</div></div>
+      <button class="btn small iconbtn" data-act="group-edit" data-id="${cur.id}" aria-label="${L('Réglages du groupe', 'Group settings')}">${ICON.gear}</button>
     </div>
-    <button class="btn primary wide" data-act="invite" data-id="${cur.id}">${ICON.send} Inviter dans ${esc(cur.name)}</button>
+    <button class="btn primary wide" data-act="invite" data-id="${cur.id}">${ICON.send} ${L('Inviter dans', 'Invite to')} ${esc(cur.name)}</button>
     <div class="people gap-top">${ids.map(id => {
       const u = id === me.id ? meU : users[id];
       const armed = ui.confirm === `gkick:${cur.id}:${id}`;
-      const extra = (cur.createdBy === id ? '<span class="chip">Créateur</span>' : '')
-        + (boss && id !== me.id ? `<button class="btn small danger ${armed ? 'armed' : ''}" data-act="group-kick" data-g="${cur.id}" data-u="${id}">${armed ? 'Sûr ?' : 'Retirer'}</button>` : '');
-      return personRow(id === me.id ? { ...u, name: u.name + ' (toi)' } : u, extra, `#/user/${id}`);
+      const extra = (cur.createdBy === id ? `<span class="chip">${L('Créateur', 'Creator')}</span>` : '')
+        + (boss && id !== me.id ? `<button class="btn small danger ${armed ? 'armed' : ''}" data-act="group-kick" data-g="${cur.id}" data-u="${id}">${armed ? L('Sûr ?', 'Sure?') : L('Retirer', 'Remove')}</button>` : '');
+      return personRow(id === me.id ? { ...u, name: u.name + L(' (toi)', ' (you)') } : u, extra, `#/user/${id}`);
     }).join('')}</div>
-    <h2>Ajouter quelqu’un de l’appli</h2>
-    <label class="searchbox">${ICON.search}<input id="memberQ" type="search" autocomplete="off" placeholder="Son pseudo ou son nom" aria-label="Chercher quelqu’un sur l’appli"></label>
+    <h2>${L('Ajouter quelqu’un de l’appli', 'Add someone from the app')}</h2>
+    <label class="searchbox">${ICON.search}<input id="memberQ" type="search" autocomplete="off" placeholder="${L('Son pseudo ou son nom', 'Their username or name')}" aria-label="${L('Chercher quelqu’un sur l’appli', 'Search for someone on the app')}"></label>
     <div id="memberRes" class="people"></div>`;
 }
 
@@ -1399,10 +1424,10 @@ function searchMembers(q) {
     const box = document.getElementById('memberRes');
     const cur = mem.get('/api/groups')?.data?.groups.find(g => g.id === ui.group);
     if (!box || !cur || document.getElementById('memberQ')?.value !== q) return;
-    box.innerHTML = !r ? '<p class="muted small">Recherche impossible pour l’instant.</p>'
-      : r.users.length ? r.users.map(u => personRow(u, cur.members.includes(u.id) ? '<span class="muted small">Déjà dedans</span>'
-        : `<button class="btn small primary" data-act="group-add" data-g="${cur.id}" data-u="${u.id}">Ajouter</button>`)).join('')
-      : '<p class="muted small">Personne avec ce nom. Envoie-lui plutôt le lien d’invitation.</p>';
+    box.innerHTML = !r ? `<p class="muted small">${L('Recherche impossible pour l’instant.', 'Search isn’t available right now.')}</p>`
+      : r.users.length ? r.users.map(u => personRow(u, cur.members.includes(u.id) ? `<span class="muted small">${L('Déjà dedans', 'Already in')}</span>`
+        : `<button class="btn small primary" data-act="group-add" data-g="${cur.id}" data-u="${u.id}">${L('Ajouter', 'Add')}</button>`)).join('')
+      : `<p class="muted small">${L('Personne avec ce nom. Envoie-lui plutôt le lien d’invitation.', 'Nobody with that name. Send them the invite link instead.')}</p>`;
   }, 300);
 }
 
@@ -1417,13 +1442,13 @@ function openGroupForm(g) {
   ui.grpEmoji = g?.emoji || GROUP_EMOJIS[0];
   const boss = g && g.createdBy === me.id;
   grpEl.innerHTML = `<div class="askbox">
-    <h2 id="grp-title">${g ? 'Réglages du groupe' : 'Nouveau groupe'}</h2>
-    <input id="grpName" class="input" maxlength="30" placeholder="Nom du groupe (ex. Les colocs)" value="${esc(g?.name || '')}" aria-label="Nom du groupe">
+    <h2 id="grp-title">${g ? L('Réglages du groupe', 'Group settings') : L('Nouveau groupe', 'New group')}</h2>
+    <input id="grpName" class="input" maxlength="30" placeholder="${L('Nom du groupe (ex. Les colocs)', 'Group name (e.g. The roommates)')}" value="${esc(g?.name || '')}" aria-label="${L('Nom du groupe', 'Group name')}">
     <div class="pills emojis">${GROUP_EMOJIS.map(e => `<button type="button" class="pill" data-act="grp-emoji" data-v="${e}" aria-pressed="${e === ui.grpEmoji}">${e}</button>`).join('')}</div>
-    <button type="button" class="btn primary" data-act="grp-save" data-id="${g?.id || ''}">${g ? 'Enregistrer' : 'Créer le groupe'}</button>
-    ${g ? `${boss ? `<button type="button" class="btn" data-act="grp-relink" data-id="${g.id}">Changer le lien d’invitation</button>
-      <p class="muted small">L’ancien lien ne marchera plus. Les membres restent dans le groupe.</p>` : ''}
-      <button type="button" class="btn danger" data-act="grp-leave" data-id="${g.id}">Quitter le groupe</button>` : ''}
+    <button type="button" class="btn primary" data-act="grp-save" data-id="${g?.id || ''}">${g ? L('Enregistrer', 'Save') : L('Créer le groupe', 'Create group')}</button>
+    ${g ? `${boss ? `<button type="button" class="btn" data-act="grp-relink" data-id="${g.id}">${L('Changer le lien d’invitation', 'Change the invite link')}</button>
+      <p class="muted small">${L('L’ancien lien ne marchera plus. Les membres restent dans le groupe.', 'The old link will stop working. Members stay in the group.')}</p>` : ''}
+      <button type="button" class="btn danger" data-act="grp-leave" data-id="${g.id}">${L('Quitter le groupe', 'Leave group')}</button>` : ''}
   </div>`;
   grpEl.showModal();
   if (!g) setTimeout(() => document.getElementById('grpName')?.focus(), 50);
@@ -1435,21 +1460,21 @@ function openGroupPicker(title, text, groups, act, extra = '') {
     <h2 id="grp-title">${esc(title)}</h2>
     ${text ? `<p>${esc(text)}</p>` : ''}
     ${groups.map(g => `<button type="button" class="btn gpick" data-act="${act}" data-id="${g.id}" data-g="${g.id}" ${extra}>
-      <span class="gemoji">${esc(g.emoji)}</span><span class="min0">${esc(g.name)}</span><span class="muted small">${plural(g.members.length, 'membre', 'membres')}</span></button>`).join('')}
-    <button type="button" class="btn" data-act="grp-close">Annuler</button>
+      <span class="gemoji">${esc(g.emoji)}</span><span class="min0">${esc(g.name)}</span><span class="muted small">${plural(g.members.length, L('membre', 'member'), L('membres', 'members'))}</span></button>`).join('')}
+    <button type="button" class="btn" data-act="grp-close">${L('Annuler', 'Cancel')}</button>
   </div>`;
   grpEl.showModal();
 }
 
 async function shareInvite(g) {
   const url = `${location.origin}/#/join/${g.invite}`;
-  const text = `Rejoins le groupe ${g.emoji} ${g.name} sur what2watch pour qu’on suive nos séries et films ensemble :`;
+  const text = L(`Rejoins le groupe ${g.emoji} ${g.name} sur what2watch pour qu’on suive nos séries et films ensemble :`, `Join the ${g.emoji} ${g.name} group on what2watch so we can track our shows and movies together:`);
   if (navigator.share) {
     try { await navigator.share({ title: 'what2watch', text, url }); return; }
     catch (e) { if (e.name === 'AbortError') return; }
   }
-  try { await navigator.clipboard.writeText(`${text} ${url}`); toast(`Lien d’invitation pour ${g.name} copié`); }
-  catch (e) { await ask({ title: `Lien pour ${g.name}`, text: url, yes: 'OK' }); }
+  try { await navigator.clipboard.writeText(`${text} ${url}`); toast(L(`Lien d’invitation pour ${g.name} copié`, `Invite link for ${g.name} copied`)); }
+  catch (e) { await ask({ title: L(`Lien pour ${g.name}`, `Link for ${g.name}`), text: url, yes: 'OK' }); }
 }
 
 // Lien d'invitation (#/join/<code>) : gardé jusqu'à ce qu'on soit connecté.
@@ -1469,13 +1494,13 @@ async function handleInvite() {
   try { g = (await get(`/api/invite/${code}`)).group; mine = (await groupsData()).groups; }
   catch (e) { return toast(e.message); }
   if (location.hash !== '#/amis') location.hash = '#/amis';
-  if (mine.some(x => x.id === g.id)) { setGroup(g.id); rerender(); return toast(`Tu fais déjà partie de ${g.emoji} ${g.name}`); }
-  const yes = await ask({ title: `Rejoindre ${g.emoji} ${g.name} ?`, text: `Ce groupe a ${plural(g.count, 'membre', 'membres')}. Tu verras leur activité dans l’onglet Amis, et eux la tienne.`, yes: 'Rejoindre le groupe', no: 'Pas maintenant' });
+  if (mine.some(x => x.id === g.id)) { setGroup(g.id); rerender(); return toast(L(`Tu fais déjà partie de ${g.emoji} ${g.name}`, `You’re already in ${g.emoji} ${g.name}`)); }
+  const yes = await ask({ title: L(`Rejoindre ${g.emoji} ${g.name} ?`, `Join ${g.emoji} ${g.name}?`), text: L(`Ce groupe a ${plural(g.count, 'membre', 'membres')}. Tu verras leur activité dans l’onglet Amis, et eux la tienne.`, `This group has ${plural(g.count, 'member', 'members')}. You’ll see their activity in the Friends tab, and they’ll see yours.`), yes: L('Rejoindre le groupe', 'Join group'), no: L('Pas maintenant', 'Not now') });
   if (!yes) return;
   try {
     const r = await post(`/api/invite/${code}/join`);
     storeGroups(r); setGroup(r.id); rerender();
-    toast(`Bienvenue dans ${g.emoji} ${g.name}`);
+    toast(L(`Bienvenue dans ${g.emoji} ${g.name}`, `Welcome to ${g.emoji} ${g.name}`));
   } catch (e) { fail(e); }
 }
 
@@ -1484,7 +1509,7 @@ function feedHTML(cur) {
   if (r.loading) return spinner();
   if (r.error) return errorBlock(r.error);
   const { items, users } = r.data;
-  if (!items.length) return `<div class="empty"><b>Rien pour l’instant</b><p>Ce que les membres ${cur ? 'de ce groupe' : 'de tes groupes'} regardent et leurs avis apparaîtront ici.</p><button class="btn primary" data-act="invite" ${cur ? `data-id="${cur.id}"` : ''}>Inviter des amis</button></div>`;
+  if (!items.length) return `<div class="empty"><b>${L('Rien pour l’instant', 'Nothing yet')}</b><p>${cur ? L('Ce que les membres de ce groupe regardent et leurs avis apparaîtront ici.', 'What this group’s members watch and their reviews will show up here.') : L('Ce que les membres de tes groupes regardent et leurs avis apparaîtront ici.', 'What your groups’ members watch and their reviews will show up here.')}</p><button class="btn primary" data-act="invite" ${cur ? `data-id="${cur.id}"` : ''}>${L('Inviter des amis', 'Invite friends')}</button></div>`;
   return `<div class="feed">${items.map(it => {
     const u = users[it.userId]; if (!u) return '';
     const t = it.title;
@@ -1492,18 +1517,18 @@ function feedHTML(cur) {
     if (it.type === 'eps') {
       href = `#/tv/${t.id}`;
       what = it.n === 1
-        ? `a vu <b>${code(it.first.s, it.first.e)}</b> de <b>${esc(t.name)}</b>`
-        : `a vu <b>${it.n} épisodes</b> de <b>${esc(t.name)}</b> <span class="muted">(${code(it.first.s, it.first.e)} → ${code(it.last.s, it.last.e)})</span>`;
+        ? L(`a vu <b>${code(it.first.s, it.first.e)}</b> de <b>${esc(t.name)}</b>`, `watched <b>${code(it.first.s, it.first.e)}</b> of <b>${esc(t.name)}</b>`)
+        : L(`a vu <b>${it.n} épisodes</b> de <b>${esc(t.name)}</b>`, `watched <b>${it.n} episodes</b> of <b>${esc(t.name)}</b>`) + ` <span class="muted">(${code(it.first.s, it.first.e)} → ${code(it.last.s, it.last.e)})</span>`;
     } else if (it.type === 'quiz') {
       href = it.mode === 'free' ? `#/${it.kind}/${t.id}` : '#/amis';
-      what = `a fait <b>${it.correct}/${it.total}</b> ${it.mode === 'free' ? `au quiz <b>${esc(t.name)}</b>` : 'au <b>quiz du jour</b>'} <span class="muted">· ${fmtPts(it.score)}</span>${it.correct === it.total ? ' 🔥' : ''}`;
+      what = `${L('a fait', 'scored')} <b>${it.correct}/${it.total}</b> ${it.mode === 'free' ? L(`au quiz <b>${esc(t.name)}</b>`, `on the <b>${esc(t.name)}</b> quiz`) : L('au <b>quiz du jour</b>', 'on the <b>daily quiz</b>')} <span class="muted">· ${fmtPts(it.score)}</span>${it.correct === it.total ? ' 🔥' : ''}`;
     } else if (it.type === 'movie') {
       href = `#/movie/${t.id}`;
-      what = `a vu le film <b>${esc(t.name)}</b>`;
+      what = L(`a vu le film <b>${esc(t.name)}</b>`, `watched the movie <b>${esc(t.name)}</b>`);
     } else {
       href = it.kind === 'movie' ? `#/movie/${t.id}` : it.kind === 'ep' ? `#/ep/${t.id}/${it.s}/${it.e}` : `#/tv/${t.id}`;
-      const target = it.kind === 'ep' ? `<b>${code(it.s, it.e)}</b> de <b>${esc(t.name)}</b>` : `<b>${esc(t.name)}</b>`;
-      what = `a donné son avis sur ${target} ${stars(it.rating)}${it.text ? `<span class="quote">${esc(it.text)}</span>` : ''}`;
+      const target = it.kind === 'ep' ? `<b>${code(it.s, it.e)}</b> ${L('de', 'of')} <b>${esc(t.name)}</b>` : `<b>${esc(t.name)}</b>`;
+      what = `${L('a donné son avis sur', 'reviewed')} ${target} ${stars(it.rating)}${it.text ? `<span class="quote">${esc(it.text)}</span>` : ''}`;
     }
     return `<article class="fitem">
       <a href="#/user/${u.id}">${avatar(u)}</a>
@@ -1519,11 +1544,11 @@ const REACTIONS = ['😂', '🔥', '😱', '❤️', '👏'];
 function reactRow(it, users) {
   const rs = it.reactions || {}, k = esc(it.key);
   const chips = REACTIONS.filter(e => rs[e]?.length).map(e => {
-    const who = rs[e].map(id => id === me.id ? 'toi' : users[id]?.name || '?').join(', ');
+    const who = rs[e].map(id => id === me.id ? L('toi', 'you') : users[id]?.name || '?').join(', ');
     return `<button type="button" class="rchip ${rs[e].includes(me.id) ? 'mine' : ''}" data-act="react" data-k="${k}" data-e="${e}" data-who="${esc(who)}" aria-label="${e} : ${esc(who)}">${e}<small>${rs[e].length}</small></button>`;
   }).join('');
   const open = ui.reactOpen === it.key;
-  return `<div class="reacts">${chips}<button type="button" class="rchip radd ${open ? 'on' : ''}" data-act="react-pick" data-k="${k}" aria-label="Réagir" aria-expanded="${open}">🙂<small>+</small></button>${
+  return `<div class="reacts">${chips}<button type="button" class="rchip radd ${open ? 'on' : ''}" data-act="react-pick" data-k="${k}" aria-label="${L('Réagir', 'React')}" aria-expanded="${open}">🙂<small>+</small></button>${
     open ? `<div class="rpicker">${REACTIONS.map(e => `<button type="button" data-act="react" data-k="${k}" data-e="${e}">${e}</button>`).join('')}</div>` : ''}</div>`;
 }
 // Applique une réaction tout de suite sur le fil en mémoire (le serveur confirme ensuite).
@@ -1535,17 +1560,18 @@ function setFeedReactions(key, fn) {
 }
 
 /* ================= Jeux : quiz et classements ================= */
-const fmtPts = n => `${Number(n).toLocaleString('fr-FR')} pts`;
+const fmtPts = n => `${Number(n).toLocaleString(LOC)} pts`;
 const MEDALS = ['🥇', '🥈', '🥉'];
-const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+const MONTHS = L(['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'],
+  ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']);
 
 function rankRows(rows, users, value) {
-  if (!rows.length) return `<p class="muted gap-top">Personne n’a encore joué. Lance-toi !</p>`;
+  if (!rows.length) return `<p class="muted gap-top">${L('Personne n’a encore joué. Lance-toi !', 'Nobody has played yet. Go for it!')}</p>`;
   return `<div class="ranks">${rows.map((r, i) => {
     const u = users[r.userId]; if (!u) return '';
     return `<a class="rank-row ${r.userId === me.id ? 'me' : ''}" href="#/user/${u.id}">
       <span class="rank-n">${MEDALS[i] || i + 1}</span>${avatar(u, 'sm')}
-      <span class="grow min0"><b>${esc(r.userId === me.id ? 'Toi' : u.name)}</b>${value(r).sub ? `<span class="muted small"> · ${value(r).sub}</span>` : ''}</span>
+      <span class="grow min0"><b>${esc(r.userId === me.id ? L('Toi', 'You') : u.name)}</b>${value(r).sub ? `<span class="muted small"> · ${value(r).sub}</span>` : ''}</span>
       <b class="rank-pts">${value(r).main}</b></a>`;
   }).join('')}</div>`;
 }
@@ -1568,42 +1594,42 @@ function gamesHTML(cur) {
   const dailyCard = daily.played
     ? `<div class="game-daily done">
         <div class="game-emoji">🎯</div>
-        <div class="min0"><b>Quiz du jour</b><div class="muted small">Tu as fait <b>${daily.correct}/${daily.total}</b> · ${fmtPts(daily.score)}. Nouveau quiz demain !</div></div>
+        <div class="min0"><b>${L('Quiz du jour', 'Daily quiz')}</b><div class="muted small">${L('Tu as fait', 'You scored')} <b>${daily.correct}/${daily.total}</b> · ${fmtPts(daily.score)}. ${L('Nouveau quiz demain !', 'New quiz tomorrow!')}</div></div>
       </div>`
     : `<div class="game-daily">
         <div class="game-emoji">🎯</div>
-        <div class="min0"><b>Quiz du jour</b><div class="muted small">10 questions sur les séries et films les plus regardés de la bande. Une seule tentative, les mêmes questions pour tout le monde !</div>
-        <button class="btn primary small" data-act="quiz-start" data-mode="daily">${daily.started ? 'Reprendre' : 'Jouer'}</button></div>
+        <div class="min0"><b>${L('Quiz du jour', 'Daily quiz')}</b><div class="muted small">${L('10 questions sur les séries et films les plus regardés de la bande. Une seule tentative, les mêmes questions pour tout le monde !', '10 questions on the shows and movies your crew watches most. One try only, same questions for everyone!')}</div>
+        <button class="btn primary small" data-act="quiz-start" data-mode="daily">${daily.started ? L('Reprendre', 'Resume') : L('Jouer', 'Play')}</button></div>
       </div>`;
   const tab = ui.rankTab || 'today';
   const ranks = tab === 'today'
     ? rankRows(today, users, x => ({ main: fmtPts(x.score), sub: `${x.correct}/${x.total}` }))
-    : rankRows(monthRank, users, x => ({ main: fmtPts(x.points), sub: plural(x.played, 'partie', 'parties') }));
+    : rankRows(monthRank, users, x => ({ main: fmtPts(x.points), sub: plural(x.played, L('partie', 'game'), L('parties', 'games')) }));
   const titles = quizzableTitles();
   return `${duelsHTML(challenges, users)}${dailyCard}
-    <h2>Classement</h2>
-    ${seg('rankTab', tab, [['today', 'Aujourd’hui'], ['month', MONTHS[Number(month.slice(5)) - 1].replace(/^./, c => c.toUpperCase())]])}
-    ${tab === 'month' ? `<p class="muted small gap-top">Points du quiz du jour + ton meilleur score sur chaque quiz libre du mois. Remise à zéro le 1ᵉʳ.</p>` : ''}
+    <h2>${L('Classement', 'Leaderboard')}</h2>
+    ${seg('rankTab', tab, [['today', L('Aujourd’hui', 'Today')], ['month', MONTHS[Number(month.slice(5)) - 1].replace(/^./, c => c.toUpperCase())]])}
+    ${tab === 'month' ? `<p class="muted small gap-top">${L('Points du quiz du jour + ton meilleur score sur chaque quiz libre du mois. Remise à zéro le 1ᵉʳ.', 'Daily quiz points + your best score on each free quiz this month. Resets on the 1st.')}</p>` : ''}
     ${ranks}
-    ${kings.length ? `<h2>Qui connaît le mieux…</h2>
+    ${kings.length ? `<h2>${L('Qui connaît le mieux…', 'Who knows best…')}</h2>
       <div class="kings">${kings.map(k => {
         const u = users[k.userId];
         const mine = k.userId === me.id;
         return `<div class="king">
           ${poster(k.title.poster, k.title.name, 'w154')}
-          <span class="min0 grow"><b>${esc(k.title.name)}</b><span class="muted small">👑 ${esc(mine ? 'Toi' : u?.name || '?')} · ${k.correct}/${k.total} · ${fmtPts(k.score)}</span></span>
+          <span class="min0 grow"><b>${esc(k.title.name)}</b><span class="muted small">👑 ${esc(mine ? L('Toi', 'You') : u?.name || '?')} · ${k.correct}/${k.total} · ${fmtPts(k.score)}</span></span>
           ${mine
-            ? `<button class="btn small" data-act="duel-pick" data-kind="${k.kind}" data-id="${k.title.id}" data-name="${esc(k.title.name)}">⚔️ Défier</button>`
+            ? `<button class="btn small" data-act="duel-pick" data-kind="${k.kind}" data-id="${k.title.id}" data-name="${esc(k.title.name)}">⚔️ ${L('Défier', 'Challenge')}</button>`
             : hasSeen(k.kind, k.title.id)
-              ? `<button class="btn small" data-act="quiz-start" data-mode="free" data-kind="${k.kind}" data-id="${k.title.id}">Le battre</button>`
-              : `<button class="btn small primary" data-act="king-seen" data-kind="${k.kind}" data-id="${k.title.id}" data-name="${esc(k.title.name)}">👁️ J’ai vu</button>`}</div>`;
+              ? `<button class="btn small" data-act="quiz-start" data-mode="free" data-kind="${k.kind}" data-id="${k.title.id}">${L('Le battre', 'Beat them')}</button>`
+              : `<button class="btn small primary" data-act="king-seen" data-kind="${k.kind}" data-id="${k.title.id}" data-name="${esc(k.title.name)}">👁️ ${L('J’ai vu', 'Seen it')}</button>`}</div>`;
       }).join('')}</div>` : ''}
-    <h2>Quiz libre</h2>
+    <h2>${L('Quiz libre', 'Free quiz')}</h2>
     ${titles.length
-      ? `<p class="muted small">Choisis une série ou un film que tu as vu. Pas de spoiler : les questions portent seulement sur les épisodes que tu as vus.</p>
+      ? `<p class="muted small">${L('Choisis une série ou un film que tu as vu. Pas de spoiler : les questions portent seulement sur les épisodes que tu as vus.', 'Pick a show or movie you’ve seen. No spoilers: questions only cover the episodes you’ve watched.')}</p>
         <div class="rail quiz-rail">${titles.slice(0, 30).map(t => `<button class="qtile" data-act="quiz-start" data-mode="free" data-kind="${t.kind}" data-id="${t.id}">
           ${poster(t.poster, t.name, 'w154')}<span>${esc(t.name)}</span></button>`).join('')}</div>`
-      : `<p class="muted">Coche des épisodes ou des films vus pour débloquer leurs quiz.</p>`}`;
+      : `<p class="muted">${L('Coche des épisodes ou des films vus pour débloquer leurs quiz.', 'Tick off episodes or movies you’ve seen to unlock their quizzes.')}</p>`}`;
 }
 
 // Défis reçus (à relever, puis résultats) et défis envoyés de la semaine.
@@ -1614,57 +1640,57 @@ function duelsHTML(ch, users) {
   for (const c of ch.received) {
     const u = users[c.fromId];
     if (!c.done) rows.push(`<div class="duel open">${u ? avatar(u, 'sm') : ''}
-      <span class="min0 grow"><b>${name(c.fromId)}</b> te défie au quiz <b>${esc(c.title.name)}</b><span class="muted small">Score à battre : ${c.correct}/${c.total} · ${fmtPts(c.score)}</span></span>
-      <button class="btn small primary" data-act="quiz-start" data-mode="free" data-challenge="${c.id}">Relever</button></div>`);
+      <span class="min0 grow">${L(`<b>${name(c.fromId)}</b> te défie au quiz <b>${esc(c.title.name)}</b>`, `<b>${name(c.fromId)}</b> challenges you on the <b>${esc(c.title.name)}</b> quiz`)}<span class="muted small">${L('Score à battre :', 'Score to beat:')} ${c.correct}/${c.total} · ${fmtPts(c.score)}</span></span>
+      <button class="btn small primary" data-act="quiz-start" data-mode="free" data-challenge="${c.id}">${L('Relever', 'Accept')}</button></div>`);
     else {
       const won = c.reply.score > c.score;
       rows.push(`<div class="duel">${u ? avatar(u, 'sm') : ''}
-        <span class="min0 grow">${won ? `🏆 Tu as battu <b>${name(c.fromId)}</b>` : c.reply.score === c.score ? `🤝 Égalité avec <b>${name(c.fromId)}</b>` : `😅 <b>${name(c.fromId)}</b> garde l’avantage`} sur <b>${esc(c.title.name)}</b>
-        <span class="muted small">${fmtPts(c.reply.score)} contre ${fmtPts(c.score)}</span></span></div>`);
+        <span class="min0 grow">${won ? L(`🏆 Tu as battu <b>${name(c.fromId)}</b>`, `🏆 You beat <b>${name(c.fromId)}</b>`) : c.reply.score === c.score ? L(`🤝 Égalité avec <b>${name(c.fromId)}</b>`, `🤝 Tie with <b>${name(c.fromId)}</b>`) : L(`😅 <b>${name(c.fromId)}</b> garde l’avantage`, `😅 <b>${name(c.fromId)}</b> keeps the lead`)} ${L('sur', 'on')} <b>${esc(c.title.name)}</b>
+        <span class="muted small">${fmtPts(c.reply.score)} ${L('contre', 'vs')} ${fmtPts(c.score)}</span></span></div>`);
     }
   }
   // Défis lancés : repliés derrière une ligne de résumé, qu'on déplie d'un appui.
   const sent = [];
   for (const c of ch.sent) {
     const u = users[c.toId];
-    const res = !c.done ? `<span class="muted small">En attente… ton score : ${fmtPts(c.score)}</span>`
-      : c.reply.score === c.score ? `<span class="muted small">🤝 Égalité : ${fmtPts(c.score)} chacun</span>`
-      : c.reply.score > c.score ? `<span class="muted small">😱 Ton score est battu : ${fmtPts(c.reply.score)} contre ${fmtPts(c.score)}</span>`
-      : `<span class="muted small">😎 Pas mieux que toi : ${fmtPts(c.reply.score)} contre ${fmtPts(c.score)}</span>`;
+    const res = !c.done ? `<span class="muted small">${L('En attente… ton score :', 'Waiting… your score:')} ${fmtPts(c.score)}</span>`
+      : c.reply.score === c.score ? `<span class="muted small">${L(`🤝 Égalité : ${fmtPts(c.score)} chacun`, `🤝 Tie: ${fmtPts(c.score)} each`)}</span>`
+      : c.reply.score > c.score ? `<span class="muted small">${L('😱 Ton score est battu :', '😱 Your score was beaten:')} ${fmtPts(c.reply.score)} ${L('contre', 'vs')} ${fmtPts(c.score)}</span>`
+      : `<span class="muted small">${L('😎 Pas mieux que toi :', '😎 Not better than you:')} ${fmtPts(c.reply.score)} ${L('contre', 'vs')} ${fmtPts(c.score)}</span>`;
     sent.push(`<div class="duel sent">${u ? avatar(u, 'sm') : ''}
-      <span class="min0 grow">Tu as défié <b>${name(c.toId)}</b> sur <b>${esc(c.title.name)}</b>${res}</span></div>`);
+      <span class="min0 grow">${L(`Tu as défié <b>${name(c.toId)}</b> sur <b>${esc(c.title.name)}</b>`, `You challenged <b>${name(c.toId)}</b> on <b>${esc(c.title.name)}</b>`)}${res}</span></div>`);
   }
   if (sent.length) {
     const open = !!ui.expanded.duelsSent, waiting = ch.sent.filter(c => !c.done).length;
     rows.push(`<button type="button" class="duel duels-toggle ${open ? 'is-open' : ''}" data-act="expand" data-key="duelsSent" aria-expanded="${open}">
       <span class="game-emoji small">⚔️</span>
-      <span class="min0 grow"><b>${sent.length > 1 ? `${sent.length} défis lancés` : '1 défi lancé'}</b>
-        <span class="muted small">${[waiting && `${waiting} en attente`, sent.length - waiting && `${sent.length - waiting} relevé${sent.length - waiting > 1 ? 's' : ''}`].filter(Boolean).join(' · ')}</span></span>${ICON.chevron}</button>`);
+      <span class="min0 grow"><b>${sent.length > 1 ? L(`${sent.length} défis lancés`, `${sent.length} challenges sent`) : L('1 défi lancé', '1 challenge sent')}</b>
+        <span class="muted small">${[waiting && L(`${waiting} en attente`, `${waiting} waiting`), sent.length - waiting && L(`${sent.length - waiting} relevé${sent.length - waiting > 1 ? 's' : ''}`, `${sent.length - waiting} taken`)].filter(Boolean).join(' · ')}</span></span>${ICON.chevron}</button>`);
     if (open) rows.push(`<div class="duels-sent">${sent.join('')}</div>`);
   }
-  return `<h2>⚔️ Défis</h2><div class="duels">${rows.join('')}</div>`;
+  return `<h2>⚔️ ${L('Défis', 'Challenges')}</h2><div class="duels">${rows.join('')}</div>`;
 }
 
 // Choisir les amis à défier (membres de mes groupes) ; renvoie leurs ids, ou [] si annulé.
 async function pickFriends(title) {
   const g = await load('/api/groups', 60e3);
   const ids = [...new Set(g.groups.flatMap(x => x.members))].filter(id => id !== me.id && g.users[id])
-    .sort((a, b) => g.users[a].name.localeCompare(g.users[b].name, 'fr'));
+    .sort((a, b) => g.users[a].name.localeCompare(g.users[b].name, LANG));
   hideToast();
   askEl.innerHTML = `<div class="askbox">
       <h2 id="ask-title">${esc(title)}</h2>
-      ${ids.length ? `<p>Ils recevront ton score et une notification. À eux de faire mieux !</p>
+      ${ids.length ? `<p>${L('Ils recevront ton score et une notification. À eux de faire mieux !', 'They’ll get your score and a notification. Their turn to beat it!')}</p>
         <div class="pick-list">${ids.map(id => `<button type="button" class="pick-mate" data-uid="${id}" aria-pressed="false">${avatar(g.users[id], 'sm')}<span class="grow">${esc(g.users[id].name)}</span><i></i></button>`).join('')}</div>
-        <button type="button" class="btn primary" data-answer="yes" disabled>Envoyer le défi</button>`
-      : `<p>Personne dans tes groupes pour l’instant. Invite des amis depuis l’onglet Groupes.</p>`}
-      <button type="button" class="btn" data-answer="no">Annuler</button>
+        <button type="button" class="btn primary" data-answer="yes" disabled>${L('Envoyer le défi', 'Send challenge')}</button>`
+      : `<p>${L('Personne dans tes groupes pour l’instant. Invite des amis depuis l’onglet Groupes.', 'Nobody in your groups yet. Invite friends from the Groups tab.')}</p>`}
+      <button type="button" class="btn" data-answer="no">${L('Annuler', 'Cancel')}</button>
     </div>`;
   const send = askEl.querySelector('[data-answer="yes"]');
   const toggle = ev => {
     const b = ev.target.closest('.pick-mate'); if (!b) return;
     b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') !== 'true');
     const n = askEl.querySelectorAll('.pick-mate[aria-pressed="true"]').length;
-    send.disabled = !n; send.textContent = n > 1 ? `Défier ${n} amis` : 'Envoyer le défi';
+    send.disabled = !n; send.textContent = n > 1 ? L(`Défier ${n} amis`, `Challenge ${n} friends`) : L('Envoyer le défi', 'Send challenge');
   };
   askEl.addEventListener('click', toggle);
   askEl.returnValue = '';
@@ -1674,12 +1700,12 @@ async function pickFriends(title) {
   return askEl.returnValue === 'yes' ? [...askEl.querySelectorAll('.pick-mate[aria-pressed="true"]')].map(b => Number(b.dataset.uid)) : [];
 }
 async function sendDuel(kind, id, name) {
-  const to = await pickFriends(`Défier qui au quiz ${name} ?`);
+  const to = await pickFriends(L(`Défier qui au quiz ${name} ?`, `Who do you want to challenge on the ${name} quiz?`));
   if (!to.length) return;
   try {
     const r = await post('/api/challenges', { kind, id: Number(id), to });
     invalidate('/api/games');
-    toast(r.sent > 1 ? `Défi envoyé à ${r.sent} amis ⚔️` : 'Défi envoyé ⚔️');
+    toast(r.sent > 1 ? L(`Défi envoyé à ${r.sent} amis ⚔️`, `Challenge sent to ${r.sent} friends ⚔️`) : L('Défi envoyé ⚔️', 'Challenge sent ⚔️'));
     rerender();
   } catch (e) { fail(e); }
 }
@@ -1691,14 +1717,14 @@ function quizBlock(kind, id) {
   const r = useData(`/api/games/title/${kind}/${id}`, 60e3);
   const k = r.data?.king, mine = r.data?.mine;
   const line = k
-    ? `👑 ${k.userId === me.id ? 'Tu es le meilleur' : `<b>${esc(r.data.users[k.userId]?.name || '?')}</b> connaît le mieux`} · ${k.correct}/${k.total}${mine && k.userId !== me.id ? ` · ton record : ${mine.correct}/${mine.total}` : ''}`
-    : 'Personne n’a encore joué. Sois le premier !';
+    ? `👑 ${k.userId === me.id ? L('Tu es le meilleur', 'You’re the best') : L(`<b>${esc(r.data.users[k.userId]?.name || '?')}</b> connaît le mieux`, `<b>${esc(r.data.users[k.userId]?.name || '?')}</b> knows it best`)} · ${k.correct}/${k.total}${mine && k.userId !== me.id ? ` · ${L('ton record :', 'your best:')} ${mine.correct}/${mine.total}` : ''}`
+    : L('Personne n’a encore joué. Sois le premier !', 'Nobody has played yet. Be the first!');
   return `<div class="pad"><div class="quiz-block">
     <span class="game-emoji">🎯</span>
-    <div class="min0 grow"><b>Quiz ${kind === 'tv' ? 'de la série' : 'du film'}</b><div class="muted small">${line}</div></div>
+    <div class="min0 grow"><b>${kind === 'tv' ? L('Quiz de la série', 'Show quiz') : L('Quiz du film', 'Movie quiz')}</b><div class="muted small">${line}</div></div>
     <span class="quiz-block-btns">
-      ${mine ? `<button class="btn small" data-act="duel-pick" data-kind="${kind}" data-id="${id}" data-name="${esc((kind === 'tv' ? state.shows[id]?.name : state.movies[id]?.title) || '')}">⚔️ Défier</button>` : ''}
-      <button class="btn small primary" data-act="quiz-start" data-mode="free" data-kind="${kind}" data-id="${id}">Jouer</button>
+      ${mine ? `<button class="btn small" data-act="duel-pick" data-kind="${kind}" data-id="${id}" data-name="${esc((kind === 'tv' ? state.shows[id]?.name : state.movies[id]?.title) || '')}">⚔️ ${L('Défier', 'Challenge')}</button>` : ''}
+      <button class="btn small primary" data-act="quiz-start" data-mode="free" data-kind="${kind}" data-id="${id}">${L('Jouer', 'Play')}</button>
     </span>
   </div></div>`;
 }
@@ -1767,7 +1793,7 @@ function paintAnswer(Q) {
   const sc = main.querySelector('.quiz-score');
   if (sc) sc.textContent = fmtPts(Q.score);
 }
-const quizFeedback = Q => Q.res ? (Q.res.ok ? `<span class="quiz-gain">+${Q.res.pts}</span> Bonne réponse !` : Q.picked === -1 ? '⏱️ Trop tard !' : 'Raté !') : '';
+const quizFeedback = Q => Q.res ? (Q.res.ok ? `<span class="quiz-gain">+${Q.res.pts}</span> ${L('Bonne réponse !', 'Correct!')}` : Q.picked === -1 ? L('⏱️ Trop tard !', '⏱️ Too late!') : L('Raté !', 'Wrong!')) : '';
 function quizCelebrate(Q) {
   if (Q.result.duel?.won) confetti(innerWidth / 2, innerHeight / 3, 50);
   else if (Q.result.correct === Q.total) { confetti(innerWidth / 2, innerHeight / 3, 60); setTimeout(() => confetti(innerWidth / 2, innerHeight / 3, 40), 400); }
@@ -1776,22 +1802,23 @@ function quizCelebrate(Q) {
 
 function viewQuiz() {
   const Q = ui.quiz;
-  if (!Q) return `<div class="pad"><div class="empty"><b>Pas de partie en cours</b><p>Lance un quiz depuis l’onglet Amis → Jeux.</p><a class="btn primary" href="#/amis" data-act="go-games">Aller aux jeux</a></div></div>`;
+  if (!Q) return `<div class="pad"><div class="empty"><b>${L('Pas de partie en cours', 'No game in progress')}</b><p>${L('Lance un quiz depuis l’onglet Amis → Jeux.', 'Start a quiz from Friends → Games.')}</p><a class="btn primary" href="#/amis" data-act="go-games">${L('Aller aux jeux', 'Go to games')}</a></div></div>`;
   const steps = `<div class="quiz-steps">${Array.from({ length: Q.total || 10 }, (_, i) =>
     `<i class="${Q.answers?.[i] === true ? 'ok' : Q.answers?.[i] === false ? 'ko' : i === Q.i && Q.q ? 'cur' : ''}"></i>`).join('')}</div>`;
   const top = `<header class="quiz-top">
-      <button class="iconbtn" data-act="quiz-quit" aria-label="Quitter le quiz">✕</button>
+      <button class="iconbtn" data-act="quiz-quit" aria-label="${L('Quitter le quiz', 'Quit quiz')}">✕</button>
       <b class="min0 quiz-name">${esc(Q.title || 'Quiz')}</b>
       <span class="quiz-score">${fmtPts(Q.score || 0)}</span>
     </header>${steps}`;
   if (Q.result) {
     const R = Q.result, perfect = R.correct === Q.total;
-    const msg = perfect ? 'Sans-faute ! 🔥' : R.correct >= Q.total * 0.7 ? 'Bien joué ! 👏' : R.correct >= Q.total * 0.4 ? 'Pas mal ! 🙂' : 'Aïe… revanche ? 😅';
+    const msg = perfect ? L('Sans-faute ! 🔥', 'Perfect score! 🔥') : R.correct >= Q.total * 0.7 ? L('Bien joué ! 👏', 'Well played! 👏') : R.correct >= Q.total * 0.4 ? L('Pas mal ! 🙂', 'Not bad! 🙂') : L('Aïe… revanche ? 😅', 'Ouch… rematch? 😅');
+    const ord = n => n + (n % 10 === 1 && n % 100 !== 11 ? 'st' : n % 10 === 2 && n % 100 !== 12 ? 'nd' : n % 10 === 3 && n % 100 !== 13 ? 'rd' : 'th');
     const extra = Q.body.mode === 'daily'
-      ? `Tu es <b>${R.rank === 1 ? '1ᵉʳ 🥇' : R.rank + 'ᵉ'}</b> sur ${R.players} aujourd’hui.`
-      : R.duel ? (R.duel.won ? `🏆 Défi relevé : tu as battu <b>${esc(R.duel.name)}</b> (${fmtPts(R.duel.score)}) !`
-        : R.duel.tie ? `Égalité parfaite avec <b>${esc(R.duel.name)}</b> !` : `😅 <b>${esc(R.duel.name)}</b> garde l’avantage avec ${fmtPts(R.duel.score)}.`)
-      : R.king ? '👑 Tu es le meilleur de ta bande sur ce quiz !' : R.record ? 'Nouveau record perso !' : R.prev ? `Ton record reste ${fmtPts(R.prev)}.` : '';
+      ? L(`Tu es <b>${R.rank === 1 ? '1ᵉʳ 🥇' : R.rank + 'ᵉ'}</b> sur ${R.players} aujourd’hui.`, `You’re <b>${R.rank === 1 ? '1st 🥇' : ord(R.rank)}</b> out of ${R.players} today.`)
+      : R.duel ? (R.duel.won ? L(`🏆 Défi relevé : tu as battu <b>${esc(R.duel.name)}</b> (${fmtPts(R.duel.score)}) !`, `🏆 Challenge won: you beat <b>${esc(R.duel.name)}</b> (${fmtPts(R.duel.score)})!`)
+        : R.duel.tie ? L(`Égalité parfaite avec <b>${esc(R.duel.name)}</b> !`, `Perfect tie with <b>${esc(R.duel.name)}</b>!`) : L(`😅 <b>${esc(R.duel.name)}</b> garde l’avantage avec ${fmtPts(R.duel.score)}.`, `😅 <b>${esc(R.duel.name)}</b> keeps the lead with ${fmtPts(R.duel.score)}.`))
+      : R.king ? L('👑 Tu es le meilleur de ta bande sur ce quiz !', '👑 You’re the best of your crew on this quiz!') : R.record ? L('Nouveau record perso !', 'New personal best!') : R.prev ? L(`Ton record reste ${fmtPts(R.prev)}.`, `Your best is still ${fmtPts(R.prev)}.`) : '';
     return `<div class="pad quiz">${top}
       <div class="quiz-result">
         <div class="quiz-big">${R.correct}<small>/${Q.total}</small></div>
@@ -1799,13 +1826,13 @@ function viewQuiz() {
         <p class="quiz-total">${fmtPts(R.score)}</p>
         ${extra ? `<p class="muted">${extra}</p>` : ''}
         <div class="quiz-end">
-          ${Q.body.mode === 'free' ? `<button class="btn primary" data-act="duel-pick" data-kind="${Q.body.kind}" data-id="${Q.body.id}" data-name="${esc(Q.title)}">⚔️ Défier un ami</button>
-            ${Q.body.challenge ? '' : `<button class="btn" data-act="quiz-again">Rejouer</button>`}<a class="btn" href="#/${Q.body.kind}/${Q.body.id}">Voir la fiche</a>` : ''}
-          <a class="btn ${Q.body.mode === 'daily' ? 'primary' : ''}" href="#/amis" data-act="go-games">Classement</a>
+          ${Q.body.mode === 'free' ? `<button class="btn primary" data-act="duel-pick" data-kind="${Q.body.kind}" data-id="${Q.body.id}" data-name="${esc(Q.title)}">⚔️ ${L('Défier un ami', 'Challenge a friend')}</button>
+            ${Q.body.challenge ? '' : `<button class="btn" data-act="quiz-again">${L('Rejouer', 'Play again')}</button>`}<a class="btn" href="#/${Q.body.kind}/${Q.body.id}">${L('Voir la fiche', 'View page')}</a>` : ''}
+          <a class="btn ${Q.body.mode === 'daily' ? 'primary' : ''}" href="#/amis" data-act="go-games">${L('Classement', 'Leaderboard')}</a>
         </div>
       </div></div>`;
   }
-  if (!Q.q) return `<div class="pad quiz">${top}${spinner('Préparation des questions…')}</div>`;
+  if (!Q.q) return `<div class="pad quiz">${top}${spinner(L('Préparation des questions…', 'Getting the questions ready…'))}</div>`;
   const left = Math.max(0, Q.deadline - Date.now());
   // L'entrée glissée ne se joue qu'à l'arrivée d'une nouvelle question.
   const enter = Q.enter; Q.enter = false;
@@ -1851,14 +1878,14 @@ function viewSuggestions() {
     const groups = suggestionGroups(r.data.recos).filter(g => !alreadySeen(g.kind, g.title.id));
     for (const g of groups) counts[g.kind]++;
     const list = groups.filter(g => g.kind === ui.sugTab);
-    const what = ui.sugTab === 'tv' ? 'série' : 'film';
+    const what = ui.sugTab === 'tv' ? 'série' : 'film', whatEn = ui.sugTab === 'tv' ? 'show' : 'movie';
     body = list.length
       ? `<div class="grid gap-top">${list.map(sugTile).join('')}</div>`
-      : `<div class="empty"><b>Aucun ${what} conseillé</b><p>Quand un ami conseille un${ui.sugTab === 'tv' ? 'e' : ''} ${what}, son affiche apparaît ici. Toi aussi, appuie sur Conseiller sur une fiche : tous tes amis le verront.</p></div>`;
+      : `<div class="empty"><b>${L(`Aucun${ui.sugTab === 'tv' ? 'e' : ''} ${what} conseillé${ui.sugTab === 'tv' ? 'e' : ''}`, `No ${whatEn}s recommended`)}</b><p>${L(`Quand un ami conseille un${ui.sugTab === 'tv' ? 'e' : ''} ${what}, son affiche apparaît ici. Toi aussi, appuie sur Conseiller sur une fiche : tous tes amis le verront.`, `When a friend recommends a ${whatEn}, its poster shows up here. You can too: tap Recommend on a page and all your friends will see it.`)}</p></div>`;
   }
   return `<div class="pad">
-    <header class="top"><h1>Suggestions</h1></header>
-    ${tabs('sugTab', ui.sugTab, [['tv', `Séries · ${counts.tv}`], ['movie', `Films · ${counts.movie}`]])}
+    <header class="top"><h1>${L('Suggestions', 'Suggestions')}</h1></header>
+    ${tabs('sugTab', ui.sugTab, [['tv', `${L('Séries', 'Shows')} · ${counts.tv}`], ['movie', `${L('Films', 'Movies')} · ${counts.movie}`]])}
     ${body}
   </div>`;
 }
@@ -1875,7 +1902,7 @@ function sugTile(g) {
   const names = froms.length === 1 ? froms[0].name : `${froms[0].name} +${froms.length - 1}`;
   const added = isAdded(g.kind, t.id);
   return `<a class="tile sug ${g.unseen ? 'unseen' : ''}" href="#/${g.kind}/${t.id}">
-    <div class="rel">${poster(t.poster, t.name)}${added ? `<span class="inlist" title="Dans ta collection">${ICON.check}</span>` : tileAdd(g.kind, t.id)}${g.unseen ? '<span class="newtag">Nouveau</span>' : ''}
+    <div class="rel">${poster(t.poster, t.name)}${added ? `<span class="inlist" title="${L('Dans ta collection', 'In your library')}">${ICON.check}</span>` : tileAdd(g.kind, t.id)}${g.unseen ? `<span class="newtag">${L('Nouveau', 'New')}</span>` : ''}
       <span class="avs onposter">${froms.slice(0, 4).map(u => avatar(u, 'sm')).join('')}${froms.length > 4 ? `<span class="av sm more">+${froms.length - 4}</span>` : ''}</span></div>
     <div class="tile-name">${esc(t.name)}</div>
     <div class="sug-from">${esc(names)}</div>
@@ -1888,9 +1915,9 @@ function suggestedBy(kind, id) {
   const mine = (r.data?.recos || []).filter(rc => rc.kind === kind && rc.title.id === Number(id));
   if (!mine.length) return '';
   return `<section class="pad suggested">
-    <h2>Conseillé par tes amis</h2>
+    <h2>${L('Conseillé par tes amis', 'Recommended by your friends')}</h2>
     ${mine.map(rc => `<div class="reco-from">${avatar(rc.from, 'sm')}<div class="min0"><span><b>${esc(rc.from?.name)}</b> · ${timeAgo(rc.at)}</span>${rc.message ? `<p class="quote">${esc(rc.message)}</p>` : ''}</div></div>`).join('')}
-    <button class="btn small" data-act="reco-hide" data-kind="${kind}" data-id="${id}">Retirer de mes suggestions</button>
+    <button class="btn small" data-act="reco-hide" data-kind="${kind}" data-id="${id}">${L('Retirer de mes suggestions', 'Remove from my suggestions')}</button>
   </section>`;
 }
 
@@ -1921,21 +1948,21 @@ function viewUser(id) {
       ${avatar(u, 'lg')}
       <div class="min0"><h1>${esc(u.name)}</h1><div class="muted">@${esc(u.username)}</div></div>
     </div>
-    ${isSelf ? '' : `<div class="pad"><button class="btn small" data-act="user-addgroup" data-id="${u.id}" data-name="${esc(u.name)}">${ICON.plus} Ajouter à un groupe</button></div>`}
+    ${isSelf ? '' : `<div class="pad"><button class="btn small" data-act="user-addgroup" data-id="${u.id}" data-name="${esc(u.name)}">${ICON.plus} ${L('Ajouter à un groupe', 'Add to a group')}</button></div>`}
     <div class="pad">
       <div class="stats">
-        <div class="stat"><b>${eps.toLocaleString('fr-FR')}</b><span>épisodes vus</span></div>
-        <div class="stat"><b>${fmtDuration(minutes)}</b><span>devant l’écran</span></div>
-        <div class="stat"><b>${seen.length}</b><span>films vus</span></div>
-        ${isSelf ? '' : `<div class="stat"><b>${commonShows + commonMovies}</b><span>en commun avec toi</span></div>`}
+        <div class="stat"><b>${eps.toLocaleString(LOC)}</b><span>${L('épisodes vus', 'episodes watched')}</span></div>
+        <div class="stat"><b>${fmtDuration(minutes)}</b><span>${L('devant l’écran', 'of screen time')}</span></div>
+        <div class="stat"><b>${seen.length}</b><span>${L('films vus', 'movies watched')}</span></div>
+        ${isSelf ? '' : `<div class="stat"><b>${commonShows + commonMovies}</b><span>${L('en commun avec toi', 'in common with you')}</span></div>`}
       </div>
-      ${rows.length ? `<h2>Séries <small>${rows.length}</small></h2><div class="grid">${rows.slice(0, 24).map(({ sh, aired }) => showTile(sh, sh.watchedCount, aired)).join('')}</div>` : ''}
-      ${seen.length ? `<h2>Films vus <small>${seen.length}</small></h2><div class="grid">${seen.slice(0, 24).map(movieTile).join('')}</div>` : ''}
-      ${reviews.length ? `<h2>Avis</h2>${reviews.map(rv => {
+      ${rows.length ? `<h2>${L('Séries', 'Shows')} <small>${rows.length}</small></h2><div class="grid">${rows.slice(0, 24).map(({ sh, aired }) => showTile(sh, sh.watchedCount, aired)).join('')}</div>` : ''}
+      ${seen.length ? `<h2>${L('Films vus', 'Movies watched')} <small>${seen.length}</small></h2><div class="grid">${seen.slice(0, 24).map(movieTile).join('')}</div>` : ''}
+      ${reviews.length ? `<h2>${L('Avis', 'Reviews')}</h2>${reviews.map(rv => {
         const href = rv.kind === 'movie' ? `#/movie/${rv.id}` : rv.kind === 'ep' ? `#/ep/${rv.id}/${rv.s}/${rv.e}` : `#/tv/${rv.id}`;
         return `<a class="review" href="${href}"><div class="review-head"><b>${esc(rv.title.name)}${rv.kind === 'ep' ? ' · ' + code(rv.s, rv.e) : ''}</b>${stars(rv.rating)}<span class="muted">${timeAgo(rv.at)}</span></div>${rv.text ? `<p>${esc(rv.text)}</p>` : ''}</a>`;
       }).join('')}` : ''}
-      ${!rows.length && !seen.length && !reviews.length ? `<div class="empty"><p>${esc(u.name)} n’a encore rien ajouté.</p></div>` : ''}
+      ${!rows.length && !seen.length && !reviews.length ? `<div class="empty"><p>${L(`${esc(u.name)} n’a encore rien ajouté.`, `${esc(u.name)} hasn’t added anything yet.`)}</p></div>` : ''}
     </div>`;
 }
 
@@ -1945,19 +1972,19 @@ function adminHTML() {
   const r = useData('/api/admin/announcement', 30e3);
   const a = r.data?.announcement;
   const cur = r.loading ? spinner() : a ? `<div class="panel gap-top ann-cur">
-      <div class="muted small">Message en cours · envoyé ${esc(new Date(a.created_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }))}</div>
+      <div class="muted small">${L('Message en cours · envoyé', 'Current message · sent')} ${esc(new Date(a.created_at).toLocaleString(LOC, { dateStyle: 'short', timeStyle: 'short' }))}</div>
       <b>${esc(a.title)}</b>
       <p>${esc(a.text)}</p>
-      <div class="row"><span class="muted small grow">Vu par ${a.seen}/${a.total}</span>
-        <button class="btn small danger" data-act="ann-remove">${ui.confirm === 'ann-remove' ? 'Sûr ? Retirer' : 'Retirer'}</button></div>
+      <div class="row"><span class="muted small grow">${L('Vu par', 'Seen by')} ${a.seen}/${a.total}</span>
+        <button class="btn small danger" data-act="ann-remove">${ui.confirm === 'ann-remove' ? L('Sûr ? Retirer', 'Sure? Remove') : L('Retirer', 'Remove')}</button></div>
     </div>` : '';
   return `<h2>Admin</h2>
     ${adminAccountsHTML()}
     <form class="panel" id="annForm">
-      <p class="muted small">Ce message s’affiche une seule fois, à la prochaine ouverture de l’appli, chez tous les membres déjà inscrits. Un nouveau message remplace l’ancien.</p>
-      <div class="field"><label for="ann-title">Titre</label><input class="input" id="ann-title" name="title" maxlength="80" required></div>
-      <div class="field"><label for="ann-text">Message</label><textarea class="input" id="ann-text" name="text" maxlength="1000" rows="4" required></textarea></div>
-      <div class="row"><button class="btn small primary" type="submit">Envoyer à tout le monde</button></div>
+      <p class="muted small">${L('Ce message s’affiche une seule fois, à la prochaine ouverture de l’appli, chez tous les membres déjà inscrits. Un nouveau message remplace l’ancien.', 'This message shows once, the next time the app opens, for every member already signed up. A new message replaces the old one.')}</p>
+      <div class="field"><label for="ann-title">${L('Titre', 'Title')}</label><input class="input" id="ann-title" name="title" maxlength="80" required></div>
+      <div class="field"><label for="ann-text">${L('Message', 'Message')}</label><textarea class="input" id="ann-text" name="text" maxlength="1000" rows="4" required></textarea></div>
+      <div class="row"><button class="btn small primary" type="submit">${L('Envoyer à tout le monde', 'Send to everyone')}</button></div>
     </form>
     ${cur}`;
 }
@@ -1967,31 +1994,38 @@ function adminAccountsHTML() {
   const r = useData('/api/admin/accounts', 30e3);
   if (!r.data) return r.loading ? spinner() : '';
   const { requests, members } = r.data, byId = Object.fromEntries(members.map(m => [m.id, m]));
-  const resetBtn = m => `<button class="btn small" data-act="admin-reset" data-id="${m.id}" data-name="${esc(m.name)}">🔑 Nouveau mot de passe</button>`;
+  const resetBtn = m => `<button class="btn small" data-act="admin-reset" data-id="${m.id}" data-name="${esc(m.name)}">🔑 ${L('Nouveau mot de passe', 'New password')}</button>`;
   const who = m => `${avatar(m, 'sm')}<span class="min0 grow"><b>${esc(m.name)}</b> <span class="muted small">@${esc(m.username)}</span>
-    <span class="muted small acc-mail">${m.email ? esc(m.email) : 'pas d’adresse mail'}</span></span>`;
+    <span class="muted small acc-mail">${m.email ? esc(m.email) : L('pas d’adresse mail', 'no email address')}</span></span>`;
   const reqs = requests.map(q => `<div class="panel acc-req">
-      <div class="muted small">🔑 Demande du ${esc(new Date(q.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }))} · <b>${esc(q.email)}</b></div>
+      <div class="muted small">🔑 ${L('Demande du', 'Request from')} ${esc(new Date(q.at).toLocaleString(LOC, { dateStyle: 'short', timeStyle: 'short' }))} · <b>${esc(q.email)}</b></div>
       ${q.users.length ? q.users.map(id => `<div class="acc-row">${who(byId[id])}${resetBtn(byId[id])}</div>`).join('')
-        : '<p class="muted small">Aucun compte avec cette adresse. Si tu sais de qui il s’agit, retrouve-le dans la liste des membres ci-dessous.</p>'}
-      <div class="row"><button class="btn small" data-act="admin-dismiss" data-id="${q.id}">Ignorer la demande</button></div>
+        : `<p class="muted small">${L('Aucun compte avec cette adresse. Si tu sais de qui il s’agit, retrouve-le dans la liste des membres ci-dessous.', 'No account with this address. If you know who it is, find them in the member list below.')}</p>`}
+      <div class="row"><button class="btn small" data-act="admin-dismiss" data-id="${q.id}">${L('Ignorer la demande', 'Dismiss request')}</button></div>
     </div>`).join('');
   const open = !!ui.expanded.adminMembers, noMail = members.filter(m => !m.email).length;
   return `${reqs}
     <button type="button" class="panel duels-toggle acc-toggle ${open ? 'is-open' : ''}" data-act="expand" data-key="adminMembers" aria-expanded="${open}">
-      <span class="min0 grow"><b>👥 Membres et identifiants</b> <span class="muted small">${members.length} membres${noMail ? ` · ${noMail} sans adresse mail` : ''}</span></span>${ICON.chevron}</button>
+      <span class="min0 grow"><b>${L('👥 Membres et identifiants', '👥 Members and logins')}</b> <span class="muted small">${members.length} ${L('membres', 'members')}${noMail ? L(` · ${noMail} sans adresse mail`, ` · ${noMail} without email`) : ''}</span></span>${ICON.chevron}</button>
     ${open ? `<div class="panel acc-list">${members.map(m => `<div class="acc-row">${who(m)}${resetBtn(m)}</div>`).join('')}</div>` : ''}`;
 }
 
 /* ----- notifications sur le téléphone ----- */
-const NOTIF_TYPES = [
+const NOTIF_TYPES = L([
   ['episodes', '📺 Nouvel épisode', 'le matin, quand un épisode d’une série que tu suis sort'],
   ['recos', '💡 Conseils', 'quand un ami conseille une série ou un film'],
   ['replies', '💬 Réponses', 'quand quelqu’un répond à un de tes avis'],
   ['reactions', '😂 Réactions', 'quand quelqu’un réagit à ton activité'],
   ['games', '🏆 Jeux', 'quand quelqu’un bat ton score à un quiz'],
   ['quiz', '🎯 Quiz du jour', 'le matin, tant que tu n’as pas fait le quiz du jour'],
-];
+], [
+  ['episodes', '📺 New episode', 'in the morning, when an episode of a show you follow comes out'],
+  ['recos', '💡 Recommendations', 'when a friend recommends a show or a movie'],
+  ['replies', '💬 Replies', 'when someone replies to one of your reviews'],
+  ['reactions', '😂 Reactions', 'when someone reacts to your activity'],
+  ['games', '🏆 Games', 'when someone beats your score on a quiz'],
+  ['quiz', '🎯 Daily quiz', 'in the morning, until you’ve played the daily quiz'],
+]);
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const b64uToBytes = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
 async function deviceSub() {
@@ -2017,7 +2051,7 @@ async function enablePush() {
   const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
   await post('/api/push/subscribe', sub.toJSON());
   ui.pushOn = true; invalidate('/api/push');
-  toast('Notifications activées 🔔');
+  toast(L('Notifications activées 🔔', 'Notifications on 🔔'));
   rerender();
   return true;
 }
@@ -2034,12 +2068,12 @@ function mailInviteHTML() {
   if (!me || me.email || Date.now() < (LS.get(MAIL_BANNER_LATER) || 0)) return '';
   return `<div class="push-invite mail-invite">
     <span class="push-bell" aria-hidden="true">📧</span>
-    <div class="min0"><b>Ajoute ton adresse mail</b>
-      <div class="muted small">Elle sert uniquement si tu perds ton pseudo ou ton mot de passe : l’administrateur pourra te retrouver et te redonner l’accès à ton compte. Personne d’autre ne la voit, et tu ne recevras aucun e-mail.</div>
+    <div class="min0"><b>${L('Ajoute ton adresse mail', 'Add your email address')}</b>
+      <div class="muted small">${L('Elle sert uniquement si tu perds ton pseudo ou ton mot de passe : l’administrateur pourra te retrouver et te redonner l’accès à ton compte. Personne d’autre ne la voit, et tu ne recevras aucun e-mail.', 'It’s only used if you lose your username or password: the admin can find you and give you back access to your account. Nobody else sees it, and you won’t get any emails.')}</div>
       <form id="mailInviteForm" class="mail-invite-form" novalidate>
-        <input class="input" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" placeholder="ton@adresse.fr" aria-label="Adresse mail" required>
+        <input class="input" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" placeholder="${L('ton@adresse.fr', 'you@example.com')}" aria-label="${L('Adresse mail', 'Email address')}" required>
         ${ui.mailInviteMsg ? `<div class="err small">${esc(ui.mailInviteMsg)}</div>` : ''}
-        <div class="row"><button class="btn small primary" type="submit">Enregistrer</button><button type="button" class="btn small" data-act="mail-later">Plus tard</button></div>
+        <div class="row"><button class="btn small primary" type="submit">${L('Enregistrer', 'Save')}</button><button type="button" class="btn small" data-act="mail-later">${L('Plus tard', 'Later')}</button></div>
       </form>
     </div>
   </div>`;
@@ -2049,9 +2083,9 @@ function pushInviteHTML() {
   if (!canAskPush() || Date.now() < (LS.get(PUSH_LATER) || 0)) return '';
   return `<div class="push-invite">
     <span class="push-bell" aria-hidden="true">🔔</span>
-    <div class="min0"><b>Ne rate plus aucun épisode</b>
-      <div class="muted small">Active les notifications : on te prévient quand un nouvel épisode sort ou quand quelqu’un répond à tes avis.</div>
-      <div class="row"><button class="btn small primary" data-act="push-invite-on">Activer</button><button class="btn small" data-act="push-later">Plus tard</button></div>
+    <div class="min0"><b>${L('Ne rate plus aucun épisode', 'Never miss an episode')}</b>
+      <div class="muted small">${L('Active les notifications : on te prévient quand un nouvel épisode sort ou quand quelqu’un répond à tes avis.', 'Turn on notifications: we’ll let you know when a new episode comes out or when someone replies to your reviews.')}</div>
+      <div class="row"><button class="btn small primary" data-act="push-invite-on">${L('Activer', 'Turn on')}</button><button class="btn small" data-act="push-later">${L('Plus tard', 'Later')}</button></div>
     </div>
   </div>`;
 }
@@ -2060,23 +2094,23 @@ function notifHTML() {
   let body;
   if (!pushSupported()) {
     body = isIOS() && !isInstalled()
-      ? `<p>Sur iPhone, les notifications marchent seulement avec l’appli installée : dans Safari, bouton Partager, puis <b>Sur l’écran d’accueil</b>. Ouvre ensuite what2watch depuis l’icône et reviens ici.</p>`
-      : `<p class="muted">Ce navigateur ne sait pas recevoir de notifications.</p>`;
+      ? `<p>${L('Sur iPhone, les notifications marchent seulement avec l’appli installée : dans Safari, bouton Partager, puis <b>Sur l’écran d’accueil</b>. Ouvre ensuite what2watch depuis l’icône et reviens ici.', 'On iPhone, notifications only work with the app installed: in Safari, tap Share, then <b>Add to Home Screen</b>. Then open what2watch from the icon and come back here.')}</p>`
+      : `<p class="muted">${L('Ce navigateur ne sait pas recevoir de notifications.', 'This browser can’t receive notifications.')}</p>`;
   } else if (Notification.permission === 'denied') {
-    body = `<p>Les notifications sont bloquées pour what2watch. Autorise-les dans les réglages de ton téléphone (ou du navigateur), puis reviens ici.</p>`;
+    body = `<p>${L('Les notifications sont bloquées pour what2watch. Autorise-les dans les réglages de ton téléphone (ou du navigateur), puis reviens ici.', 'Notifications are blocked for what2watch. Allow them in your phone (or browser) settings, then come back here.')}</p>`;
   } else {
     checkDeviceSub();
     if (ui.pushOn === null) body = spinner();
     else if (!ui.pushOn) {
-      body = `<p>Reçois un petit message sur ce téléphone quand un épisode sort, qu’un ami te conseille un titre, ou qu’on réagit à ce que tu fais.</p>
-        <div class="row"><button class="btn small primary" data-act="push-on">Activer les notifications</button></div>`;
+      body = `<p>${L('Reçois un petit message sur ce téléphone quand un épisode sort, qu’un ami te conseille un titre, ou qu’on réagit à ce que tu fais.', 'Get a quick message on this phone when an episode comes out, a friend recommends something, or someone reacts to what you do.')}</p>
+        <div class="row"><button class="btn small primary" data-act="push-on">${L('Activer les notifications', 'Turn on notifications')}</button></div>`;
     } else {
       const r = useData('/api/push', 60e3);
       const prefs = r.data?.prefs || {};
       body = `<div class="toggles">${NOTIF_TYPES.map(([k, label, hint]) =>
           `<button type="button" class="toggle" data-act="notif-pref" data-k="${k}" aria-pressed="${prefs[k] !== false}">
             <span class="min0"><b>${label}</b><span class="muted small">${hint}</span></span><i></i></button>`).join('')}</div>
-        <div class="row gap-top"><button class="btn small" data-act="push-test">Envoyer un test</button><button class="btn small" data-act="push-off">Couper sur ce téléphone</button></div>`;
+        <div class="row gap-top"><button class="btn small" data-act="push-test">${L('Envoyer un test', 'Send a test')}</button><button class="btn small" data-act="push-off">${L('Couper sur ce téléphone', 'Turn off on this phone')}</button></div>`;
     }
   }
   return `<h2>Notifications</h2><div class="panel">${body}</div>`;
@@ -2096,72 +2130,81 @@ function viewProfile() {
   const finished = shows.filter(s => bucket(s) === 'finished').length;
 
   const stats = `<div class="stats gap-top">
-      <div class="stat wide"><b>${fmtDuration(tvMin + mvMin)}</b><span>passés devant l’écran</span></div>
-      <div class="stat"><b>${eps.toLocaleString('fr-FR')}</b><span>épisodes vus</span></div>
-      <div class="stat"><b>${fmtDuration(tvMin)}</b><span>de séries</span></div>
-      <div class="stat"><b>${shows.length}</b><span>séries suivies · ${finished} terminées</span></div>
-      <div class="stat"><b>${month}</b><span>épisodes ce mois-ci</span></div>
-      <div class="stat"><b>${seen.length}</b><span>films vus</span></div>
-      <div class="stat"><b>${fmtDuration(mvMin)}</b><span>de films</span></div>
+      <div class="stat wide"><b>${fmtDuration(tvMin + mvMin)}</b><span>${L('passés devant l’écran', 'spent watching')}</span></div>
+      <div class="stat"><b>${eps.toLocaleString(LOC)}</b><span>${L('épisodes vus', 'episodes watched')}</span></div>
+      <div class="stat"><b>${fmtDuration(tvMin)}</b><span>${L('de séries', 'of shows')}</span></div>
+      <div class="stat"><b>${shows.length}</b><span>${L(`séries suivies · ${finished} terminées`, `shows followed · ${finished} finished`)}</span></div>
+      <div class="stat"><b>${month}</b><span>${L('épisodes ce mois-ci', 'episodes this month')}</span></div>
+      <div class="stat"><b>${seen.length}</b><span>${L('films vus', 'movies watched')}</span></div>
+      <div class="stat"><b>${fmtDuration(mvMin)}</b><span>${L('de films', 'of movies')}</span></div>
     </div>
-    ${queue.length ? `<p class="muted gap-top">${plural(queue.length, 'modification', 'modifications')} en attente d’envoi (pas de connexion au serveur).</p>` : ''}`;
+    ${queue.length ? `<p class="muted gap-top">${L(`${plural(queue.length, 'modification', 'modifications')} en attente d’envoi (pas de connexion au serveur).`, `${plural(queue.length, 'change', 'changes')} waiting to be sent (can’t reach the server).`)}</p>` : ''}`;
 
-  const settings = `<h2>Apparence</h2>
-    ${seg('theme', ui.theme, [['auto', 'Auto'], ['light', 'Clair'], ['dark', 'Sombre']])}
-    <p class="muted small gap-top">Auto suit le réglage clair ou sombre de ton téléphone.</p>
+  const settings = `<h2>${L('Langue', 'Language')}</h2>
+    ${seg('lang', LANG, [['fr', 'Français'], ['en', 'English']])}
+
+    <h2>${L('Apparence', 'Appearance')}</h2>
+    ${seg('theme', ui.theme, [['auto', 'Auto'], ['light', L('Clair', 'Light')], ['dark', L('Sombre', 'Dark')]])}
+    <p class="muted small gap-top">${L('Auto suit le réglage clair ou sombre de ton téléphone.', 'Auto follows your phone’s light or dark setting.')}</p>
 
     ${notifHTML()}
 
-    <h2>Mon avatar</h2>
+    <h2>${L('Mon avatar', 'My avatar')}</h2>
     <div class="panel">
       <div class="avpick">${AVATARS.map(([emoji, hue], i) =>
         `<button type="button" class="av emoji" style="--h:${hue}" data-act="avatar-preset" data-n="${i}" aria-pressed="${me.avatar === 'e' + i}" aria-label="Avatar ${emoji}">${emoji}</button>`).join('')}</div>
       <div class="row">
-        <label class="btn small">${ICON.plus} Ma photo<input type="file" id="avatarFile" accept="image/*" hidden></label>
-        ${me.avatar ? `<button type="button" class="btn small" data-act="avatar-clear">Revenir à mon initiale</button>` : ''}
+        <label class="btn small">${ICON.plus} ${L('Ma photo', 'My photo')}<input type="file" id="avatarFile" accept="image/*" hidden></label>
+        ${me.avatar ? `<button type="button" class="btn small" data-act="avatar-clear">${L('Revenir à mon initiale', 'Back to my initial')}</button>` : ''}
       </div>
     </div>
 
-    <h2>Mon compte</h2>
+    <h2>${L('Mon compte', 'My account')}</h2>
     <form class="panel" id="nameForm">
-      <div class="field"><label for="acc-name">Nom affiché <span class="opt">(ton pseudo de connexion reste @${esc(me.username)})</span></label><input class="input" id="acc-name" name="name" maxlength="40" value="${esc(me.name)}"></div>
-      <div class="row"><button class="btn small" type="submit">Enregistrer le nom</button></div>
+      <div class="field"><label for="acc-name">${L('Nom affiché', 'Display name')} <span class="opt">${L(`(ton pseudo de connexion reste @${esc(me.username)})`, `(your sign-in username stays @${esc(me.username)})`)}</span></label><input class="input" id="acc-name" name="name" maxlength="40" value="${esc(me.name)}"></div>
+      <div class="row"><button class="btn small" type="submit">${L('Enregistrer le nom', 'Save name')}</button></div>
     </form>
     <form class="panel gap-top" id="mailForm">
-      <div class="field"><label for="acc-mail">Adresse mail</label><input class="input" id="acc-mail" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" value="${esc(me.email || '')}" placeholder="ton@adresse.fr">
+      <div class="field"><label for="acc-mail">${L('Adresse mail', 'Email address')}</label><input class="input" id="acc-mail" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" value="${esc(me.email || '')}" placeholder="${L('ton@adresse.fr', 'you@example.com')}">
         <p class="muted small field-help">🔒 ${EMAIL_WHY}</p></div>
-      <div class="row"><button class="btn small" type="submit">Enregistrer l’adresse</button></div>
+      <div class="row"><button class="btn small" type="submit">${L('Enregistrer l’adresse', 'Save address')}</button></div>
     </form>
     <form class="panel gap-top" id="passForm">
-      <div class="field"><label for="acc-cur">Mot de passe actuel</label><input class="input" id="acc-cur" name="current" type="password" autocomplete="current-password"></div>
-      <div class="field"><label for="acc-new">Nouveau mot de passe</label><input class="input" id="acc-new" name="next" type="password" autocomplete="new-password"></div>
-      <div class="row"><button class="btn small" type="submit">Changer le mot de passe</button></div>
+      <div class="field"><label for="acc-cur">${L('Mot de passe actuel', 'Current password')}</label><input class="input" id="acc-cur" name="current" type="password" autocomplete="current-password"></div>
+      <div class="field"><label for="acc-new">${L('Nouveau mot de passe', 'New password')}</label><input class="input" id="acc-new" name="next" type="password" autocomplete="new-password"></div>
+      <div class="row"><button class="btn small" type="submit">${L('Changer le mot de passe', 'Change password')}</button></div>
     </form>
     ${ui.accountMsg ? `<p class="${ui.accountMsg.startsWith('✓') ? 'ok' : 'err'} gap-top">${esc(ui.accountMsg)}</p>` : ''}
 
-    <h2>Inviter des amis</h2>
+    <h2>${L('Inviter des amis', 'Invite friends')}</h2>
     <div class="panel">
-      <p>Pour que tes amis voient ton activité, invite-les dans un de tes groupes : onglet Amis, puis Groupes.</p>
-      <div class="row"><a class="btn small" href="#/amis" data-act="go-groups">Mes groupes</a><button class="btn small" data-act="share-app">Partager l’adresse de l’appli</button></div>
+      <p>${L('Pour que tes amis voient ton activité, invite-les dans un de tes groupes : onglet Amis, puis Groupes.', 'For your friends to see your activity, invite them into one of your groups: Friends tab, then Groups.')}</p>
+      <div class="row"><a class="btn small" href="#/amis" data-act="go-groups">${L('Mes groupes', 'My groups')}</a><button class="btn small" data-act="share-app">${L('Partager l’adresse de l’appli', 'Share the app’s address')}</button></div>
     </div>
     ${me.admin ? adminHTML() : ''}
-    <div class="row gap-top"><button class="btn danger" data-act="logout">Me déconnecter</button></div>`;
+    <div class="row gap-top"><button class="btn danger" data-act="logout">${L('Me déconnecter', 'Sign out')}</button></div>`;
 
   return `<div class="pad">
-    <header class="top"><h1>Profil</h1></header>
+    <header class="top"><h1>${L('Profil', 'Profile')}</h1></header>
     ${installBlock()}
-    <a class="person me-row" href="#/user/${me.id}"><div class="person-link">${avatar(me)}<div class="min0"><b>${esc(me.name)}</b><div class="muted small">@${esc(me.username)} · voir mon profil comme mes amis</div></div></div></a>
-    ${tabs('profTab', ui.profTab, [['settings', 'Réglages'], ['stats', 'Statistiques']])}
+    <a class="person me-row" href="#/user/${me.id}"><div class="person-link">${avatar(me)}<div class="min0"><b>${esc(me.name)}</b><div class="muted small">@${esc(me.username)} · ${L('voir mon profil comme mes amis', 'see my profile as my friends do')}</div></div></div></a>
+    ${tabs('profTab', ui.profTab, [['settings', L('Réglages', 'Settings')], ['stats', L('Statistiques', 'Stats')]])}
     ${ui.profTab === 'stats' ? stats : settings}
 
     <div class="sig">${LOGO}<span class="wordmark">${WORDMARK}</span></div>
-    <p class="fine">Données et images fournies par <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>. Cette application utilise l’API TMDB sans être approuvée ni certifiée par TMDB.</p>
+    <p class="fine">${L('Données et images fournies par <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>. Cette application utilise l’API TMDB sans être approuvée ni certifiée par TMDB.', 'Data and images provided by <a href="https://www.themoviedb.org" target="_blank" rel="noopener">TMDB</a>. This app uses the TMDB API but is not endorsed or certified by TMDB.')}</p>
   </div>`;
 }
 
 /* ================= Routeur et rendu ================= */
 const main = document.getElementById('app');
 const tabbar = document.getElementById('tabbar');
+// Noms des onglets du bas (écrits en français dans la page).
+if (LANG === 'en') {
+  const names = { suggestions: 'Suggestions', amis: 'Friends', decouvrir: 'Discover', collection: 'Library', profil: 'Profile' };
+  for (const a of tabbar.querySelectorAll('a')) a.querySelector('span').textContent = names[a.dataset.tab];
+  tabbar.setAttribute('aria-label', 'Main navigation');
+}
 const scrollMemo = {};
 let navDepth = 0;
 let deferredRender = false;
@@ -2296,10 +2339,10 @@ function doneState(id, s) {
 function celebrate(before, after, s, sel) {
   if (after.all && !before.all) {
     confettiFrom(sel); setTimeout(() => confetti(innerWidth / 2, innerHeight * .4, 36), 250);
-    toast(after.ended ? `${after.name} : série terminée ! 🏆` : `Tu es à jour sur ${after.name} ! 🎉`);
+    toast(after.ended ? L(`${after.name} : série terminée ! 🏆`, `${after.name}: show finished! 🏆`) : L(`Tu es à jour sur ${after.name} ! 🎉`, `You’re caught up on ${after.name}! 🎉`));
     return true;
   }
-  if (after.season && !before.season) { confettiFrom(sel); toast(`Saison ${s} terminée ! 🎉`); return true; }
+  if (after.season && !before.season) { confettiFrom(sel); toast(L(`Saison ${s} terminée ! 🎉`, `Season ${s} done! 🎉`)); return true; }
   return false;
 }
 
@@ -2313,7 +2356,7 @@ if (!calm() && !afterUpdate) {
   const pop = (txt, i, cls = '') => `<span class="sp-w ${cls}" style="--i:${i}">${txt}</span>`;
   sp.innerHTML = `<div class="sp-in">${LOGO}
       <div class="sp-name">${pop('what', 0)}${pop('2', 1, 'two')}${pop('watch', 2)}</div>
-      <div class="sp-tag">${'Tes séries. Tes films. Tes potes.'.split(' ').map((w, i) => pop(w, i, i % 2 ? 'hl' : '')).join(' ')}</div>
+      <div class="sp-tag">${L('Tes séries. Tes films. Tes potes.', 'Your shows. Your movies. Your friends.').split(' ').map((w, i) => pop(w, i, i % 2 ? 'hl' : '')).join(' ')}</div>
     </div>`;
   document.body.append(sp);
   const end = () => { sp.classList.add('out'); setTimeout(() => sp.remove(), 450); };
@@ -2457,9 +2500,10 @@ async function showDuels(list) {
     LS.set(key, [...shown].slice(-50));
     const more = fresh.length - 1;
     const go = await ask({
-      title: `⚔️ ${c.from} te défie !`,
-      text: `Quiz ${c.title}\nScore à battre : ${c.correct}/${c.total} · ${fmtPts(c.score)}${more ? `\n\n+ ${more > 1 ? `${more} autres défis` : 'un autre défi'} t’attend${more > 1 ? 'ent' : ''} dans Amis → Jeux.` : ''}`,
-      yes: 'Relever le défi', no: 'Plus tard',
+      title: L(`⚔️ ${c.from} te défie !`, `⚔️ ${c.from} challenges you!`),
+      text: L(`Quiz ${c.title}\nScore à battre : ${c.correct}/${c.total} · ${fmtPts(c.score)}${more ? `\n\n+ ${more > 1 ? `${more} autres défis` : 'un autre défi'} t’attend${more > 1 ? 'ent' : ''} dans Amis → Jeux.` : ''}`,
+        `${c.title} quiz\nScore to beat: ${c.correct}/${c.total} · ${fmtPts(c.score)}${more ? `\n\n+ ${more > 1 ? `${more} more challenges are` : 'one more challenge is'} waiting in Friends → Games.` : ''}`),
+      yes: L('Relever le défi', 'Take the challenge'), no: L('Plus tard', 'Later'),
     });
     if (go) startQuiz({ mode: 'free', challenge: c.id });
   } finally { showDuels.busy = false; }
@@ -2483,12 +2527,12 @@ async function offerEarlier(id, sh, s, e, title, no) {
   const yes = await ask({
     title,
     text: n === 1
-      ? `Marquer aussi l’épisode précédent (${code(...before[0])}) comme vu ?`
-      : `Marquer aussi les ${n} épisodes précédents comme vus ? (de ${code(...before[0])} à ${code(...before[n - 1])})`,
-    yes: n === 1 ? 'Oui, le marquer' : `Oui, marquer les ${n}`,
+      ? L(`Marquer aussi l’épisode précédent (${code(...before[0])}) comme vu ?`, `Also mark the previous episode (${code(...before[0])}) as watched?`)
+      : L(`Marquer aussi les ${n} épisodes précédents comme vus ? (de ${code(...before[0])} à ${code(...before[n - 1])})`, `Also mark the ${n} previous episodes as watched? (${code(...before[0])} to ${code(...before[n - 1])})`),
+    yes: n === 1 ? L('Oui, le marquer', 'Yes, mark it') : L(`Oui, marquer les ${n}`, `Yes, mark all ${n}`),
     no,
   });
-  if (yes) { setEps(id, before, true); rerender(); toast(n === 1 ? 'Épisode précédent marqué comme vu' : `${n} épisodes marqués comme vus`); }
+  if (yes) { setEps(id, before, true); rerender(); toast(n === 1 ? L('Épisode précédent marqué comme vu', 'Previous episode marked as watched') : L(`${n} épisodes marqués comme vus`, `${n} episodes marked as watched`)); }
   return true;
 }
 
@@ -2511,12 +2555,12 @@ async function cropPhoto(file) {
   const V = 280;                                   // taille du cadre à l'écran (px CSS)
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   cropEl.innerHTML = `<div class="askbox cropbox">
-      <h2 id="crop-title">Recadre ta photo</h2>
-      <p>Fais glisser pour placer ton visage, pince ou utilise le curseur pour zoomer.</p>
+      <h2 id="crop-title">${L('Recadre ta photo', 'Crop your photo')}</h2>
+      <p>${L('Fais glisser pour placer ton visage, pince ou utilise le curseur pour zoomer.', 'Drag to place your face, pinch or use the slider to zoom.')}</p>
       <div class="cropview"><canvas width="${V * dpr}" height="${V * dpr}"></canvas></div>
       <input type="range" class="cropzoom" min="1" max="4" step="0.01" value="1" aria-label="Zoom">
-      <button type="button" class="btn primary" data-crop="ok">Utiliser cette photo</button>
-      <button type="button" class="btn" data-crop="cancel">Annuler</button>
+      <button type="button" class="btn primary" data-crop="ok">${L('Utiliser cette photo', 'Use this photo')}</button>
+      <button type="button" class="btn" data-crop="cancel">${L('Annuler', 'Cancel')}</button>
     </div>`;
   const canvas = cropEl.querySelector('canvas'), ctx = canvas.getContext('2d');
   const zoomInput = cropEl.querySelector('.cropzoom');
@@ -2588,15 +2632,15 @@ document.addEventListener('change', async ev => {
   if (!file) return;
   let photo;
   try { photo = await cropPhoto(file); }
-  catch (e) { return toast('Impossible de lire cette image. Essaie une photo JPEG ou PNG.'); }
-  if (photo) await saveAvatar({ photo }, 'Photo de profil enregistrée');
+  catch (e) { return toast(L('Impossible de lire cette image. Essaie une photo JPEG ou PNG.', 'Can’t read this image. Try a JPEG or PNG photo.')); }
+  if (photo) await saveAvatar({ photo }, L('Photo de profil enregistrée', 'Profile photo saved'));
 });
 
 /* ================= Installation sur l'écran d'accueil ================= */
 // Android et Chrome proposent l'installation eux-mêmes (en https seulement) ; sur iPhone, il faut passer par Safari.
 let installPrompt = null;
 addEventListener('beforeinstallprompt', ev => { ev.preventDefault(); installPrompt = ev; rerender(); });
-addEventListener('appinstalled', () => { installPrompt = null; rerender(); toast('what2watch est installée sur ton écran d’accueil'); });
+addEventListener('appinstalled', () => { installPrompt = null; rerender(); toast(L('what2watch est installée sur ton écran d’accueil', 'what2watch is on your home screen')); });
 const isInstalled = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
@@ -2604,8 +2648,8 @@ function installBlock() {
   if (isInstalled()) return '';
   return `<div class="install">
     ${LOGO}
-    <div class="min0"><b>Installe what2watch</b><div class="muted small">Pour l’ouvrir depuis ton écran d’accueil, comme une vraie appli.</div></div>
-    <button class="btn small primary" data-act="install">Installer</button>
+    <div class="min0"><b>${L('Installe what2watch', 'Install what2watch')}</b><div class="muted small">${L('Pour l’ouvrir depuis ton écran d’accueil, comme une vraie appli.', 'Open it from your home screen, like a real app.')}</div></div>
+    <button class="btn small primary" data-act="install">${L('Installer', 'Install')}</button>
   </div>`;
 }
 
@@ -2617,9 +2661,9 @@ async function installApp() {
     return;
   }
   const text = isIOS()
-    ? 'Dans Safari, touche le bouton Partager (le carré avec une flèche vers le haut), puis « Sur l’écran d’accueil » et « Ajouter ».'
-    : 'Ouvre le menu de ton navigateur (⋮ en haut à droite dans Chrome), puis choisis « Installer l’application » ou « Ajouter à l’écran d’accueil ».';
-  await ask({ title: 'Installer what2watch', text, yes: 'Compris' });
+    ? L('Dans Safari, touche le bouton Partager (le carré avec une flèche vers le haut), puis « Sur l’écran d’accueil » et « Ajouter ».', 'In Safari, tap the Share button (the square with an arrow pointing up), then “Add to Home Screen” and “Add”.')
+    : L('Ouvre le menu de ton navigateur (⋮ en haut à droite dans Chrome), puis choisis « Installer l’application » ou « Ajouter à l’écran d’accueil ».', 'Open your browser menu (⋮ at the top right in Chrome), then choose “Install app” or “Add to Home screen”.');
+  await ask({ title: L('Installer what2watch', 'Install what2watch'), text, yes: L('Compris', 'Got it') });
 }
 
 /* ================= Thème clair / sombre ================= */
@@ -2688,12 +2732,22 @@ function armConfirm(key) {
   ui.confirm = key;
   setTimeout(() => { if (ui.confirm === key) { ui.confirm = null; rerender(); } }, 4000);
 }
-const fail = err => toast(err.message || 'Une erreur est survenue.');
+const fail = err => toast(err.message || L('Une erreur est survenue.', 'Something went wrong.'));
+
+// Changement de langue : enregistré sur le compte (pour les notifications), puis l'appli se recharge.
+async function setLang(v) {
+  if (v === LANG) return;
+  LS.set('w2w.lang', v);
+  if (me) { me = { ...me, lang: v }; LS.set('sequence.me', me); } else LS.set('w2w.langPending', 1);
+  try { if (me) await post('/api/me/lang', { lang: v }); } catch (e) { /* le profil suivra au prochain changement */ }
+  location.reload();
+}
 
 /* ================= Actions ================= */
 const actions = {
   seg({ name, v }, el) {
     if (name === 'theme') return switchTheme(v, el);
+    if (name === 'lang') return setLang(v);
     if (name === 'rankTab') { ui.rankTab = v; return rerender(); }
     const from = Number(main.querySelector(`[data-tabs="${name}"]`)?.style.getPropertyValue('--i'));
     ui[name] = v;
@@ -2716,11 +2770,11 @@ const actions = {
     setEps(id, [[n.s, n.e]], true); rerender();
     flash(`.checkbtn[data-id="${id}"]`, 'just');
     if (celebrate(before, doneState(id, n.s), n.s, `.checkbtn[data-id="${id}"]`)) return;
-    toast(`${sh.name} · ${code(n.s, n.e)} vu`, { label: 'Annuler', run() { setEps(id, [[n.s, n.e]], false); rerender(); } });
+    toast(`${sh.name} · ${code(n.s, n.e)} ${L('vu', 'watched')}`, { label: L('Annuler', 'Undo'), run() { setEps(id, [[n.s, n.e]], false); rerender(); } });
   },
 
   async track({ id }) {
-    try { const sh = await trackShow(id); rerender(); replay(main.querySelector('.progress'), 'glow'); toast(`${sh.name} ajoutée à tes séries`); }
+    try { const sh = await trackShow(id); rerender(); replay(main.querySelector('.progress'), 'glow'); toast(L(`${sh.name} ajoutée à tes séries`, `${sh.name} added to your shows`)); }
     catch (e) { fail(e); }
   },
 
@@ -2729,13 +2783,13 @@ const actions = {
     const name = state.shows[id]?.name;
     commit({ op: 'show.untrack', id: Number(id) });
     ui.confirm = null; rerender();
-    toast(`${name} retirée`);
+    toast(L(`${name} retirée`, `${name} removed`));
   },
 
   archive({ id }) {
     const sh = state.shows[id];
     commit({ op: 'show.archive', id: Number(id), on: !sh.archived }); rerender();
-    toast(sh.archived ? `${sh.name} abandonnée` : `${sh.name} reprise`);
+    toast(sh.archived ? L(`${sh.name} abandonnée`, `${sh.name} dropped`) : L(`${sh.name} reprise`, `${sh.name} resumed`));
   },
 
   season({ id, n }) {
@@ -2757,7 +2811,7 @@ const actions = {
     flash(sel, 'just');
     celebrate(before, doneState(id, s), s, sel);
     before = doneState(id, s);
-    if (await offerEarlier(id, sh, s, e, `Tu as vu ${code(s, e)}`, `Non, juste ${code(s, e)}`)) celebrate(before, doneState(id, s), s, sel);
+    if (await offerEarlier(id, sh, s, e, L(`Tu as vu ${code(s, e)}`, `You watched ${code(s, e)}`), L(`Non, juste ${code(s, e)}`, `No, just ${code(s, e)}`))) celebrate(before, doneState(id, s), s, sel);
   },
 
   async ['season-all']({ id, n }) {
@@ -2772,13 +2826,13 @@ const actions = {
     const sel = `.tick[data-act="season-all"][data-n="${n}"]`;
     let before = doneState(id, n);
     setEps(id, list, !allSeen); rerender();
-    if (allSeen) return toast(`Saison ${n} décochée`);
+    if (allSeen) return toast(L(`Saison ${n} décochée`, `Season ${n} unticked`));
     flash(sel, 'just');
     const party = celebrate(before, doneState(id, n), n, sel);
     before = doneState(id, n);
-    const earlier = await offerEarlier(id, sh, n, 1, `Saison ${n} vue`, `Non, juste la saison ${n}`);
+    const earlier = await offerEarlier(id, sh, n, 1, L(`Saison ${n} vue`, `Season ${n} watched`), L(`Non, juste la saison ${n}`, `No, just season ${n}`));
     if (earlier) celebrate(before, doneState(id, n), n, sel);
-    else if (!party) toast(`Saison ${n} marquée comme vue`);
+    else if (!party) toast(L(`Saison ${n} marquée comme vue`, `Season ${n} marked as watched`));
   },
 
   // Le + s'ouvre sur deux choix : « À voir » ou « J'ai vu ».
@@ -2797,15 +2851,15 @@ const actions = {
     try {
       if (type === 'movie') {
         const m = await addMovie(id, st);
-        toast(st === 'watched' ? `${m.title} marqué comme vu` : `${m.title} ajouté à ta liste « À voir »`);
+        toast(st === 'watched' ? L(`${m.title} marqué comme vu`, `${m.title} marked as watched`) : L(`${m.title} ajouté à ta liste « À voir »`, `${m.title} added to your watchlist`));
       } else {
         const sh = await trackShow(id);
         if (st === 'watched') {
           // Tous les épisodes déjà sortis sont cochés ; « Annuler » les décoche (la série reste suivie).
           const list = airedEpisodes(sh).filter(([s, e]) => !sh.watched[epKey(s, e)]);
           setEps(id, list, true);
-          toast(`${sh.name} marquée comme vue (${plural(list.length, 'épisode', 'épisodes')})`, { label: 'Annuler', run: () => { setEps(id, list, false); rerender(); } });
-        } else toast(`${sh.name} ajoutée à tes séries à voir`);
+          toast(L(`${sh.name} marquée comme vue (${plural(list.length, 'épisode', 'épisodes')})`, `${sh.name} marked as watched (${plural(list.length, 'episode', 'episodes')})`), { label: L('Annuler', 'Undo'), run: () => { setEps(id, list, false); rerender(); } });
+        } else toast(L(`${sh.name} ajoutée à tes séries à voir`, `${sh.name} added to your shows to watch`));
       }
     } catch (e) { fail(e); }
     ui.addOpen = null;
@@ -2814,18 +2868,18 @@ const actions = {
 
   async ['m-list']({ id }) {
     const m = state.movies[id];
-    if (m?.status === 'watchlist') { commit({ op: 'movie.set', id: Number(id), status: null }); rerender(); toast('Retiré de ta liste'); return; }
-    try { await addMovie(id, 'watchlist'); rerender(); flash(`[data-act="m-list"][data-id="${id}"]`, 'done'); toast('Ajouté à ta liste « À voir »'); } catch (e) { fail(e); }
+    if (m?.status === 'watchlist') { commit({ op: 'movie.set', id: Number(id), status: null }); rerender(); toast(L('Retiré de ta liste', 'Removed from your list')); return; }
+    try { await addMovie(id, 'watchlist'); rerender(); flash(`[data-act="m-list"][data-id="${id}"]`, 'done'); toast(L('Ajouté à ta liste « À voir »', 'Added to your watchlist')); } catch (e) { fail(e); }
   },
 
   async ['m-seen']({ id }) {
     const m = state.movies[id];
     if (m?.status === 'watched') {
       commit({ op: 'movie.set', id: Number(id), status: null }); rerender();
-      toast('Film retiré des films vus');
+      toast(L('Film retiré des films vus', 'Movie removed from watched'));
       return;
     }
-    try { await addMovie(id, 'watched'); rerender(); flash(`[data-act="m-seen"][data-id="${id}"]`, 'done'); toast('Film marqué comme vu'); } catch (e) { fail(e); }
+    try { await addMovie(id, 'watched'); rerender(); flash(`[data-act="m-seen"][data-id="${id}"]`, 'done'); toast(L('Film marqué comme vu', 'Movie marked as watched')); } catch (e) { fail(e); }
   },
 
   /* ----- avis ----- */
@@ -2853,9 +2907,9 @@ const actions = {
   async ['king-seen']({ kind, id, name }, el) {
     const tv = kind === 'tv';
     if (!await ask({
-      title: tv ? 'Tu as vu cette série ?' : 'Tu as vu ce film ?',
-      text: tv ? `Tous les épisodes déjà sortis de « ${name} » seront cochés comme vus, puis le quiz se lance.` : `« ${name} » sera marqué comme vu, puis le quiz se lance.`,
-      yes: 'Oui, marquer et jouer', no: 'Annuler',
+      title: tv ? L('Tu as vu cette série ?', 'Have you seen this show?') : L('Tu as vu ce film ?', 'Have you seen this movie?'),
+      text: tv ? L(`Tous les épisodes déjà sortis de « ${name} » seront cochés comme vus, puis le quiz se lance.`, `Every episode of “${name}” out so far will be marked as watched, then the quiz starts.`) : L(`« ${name} » sera marqué comme vu, puis le quiz se lance.`, `“${name}” will be marked as watched, then the quiz starts.`),
+      yes: L('Oui, marquer et jouer', 'Yes, mark it and play'), no: L('Annuler', 'Cancel'),
     })) return;
     el.disabled = true;
     try {
@@ -2871,7 +2925,7 @@ const actions = {
   ['quiz-again']() { const { mode, kind, id } = ui.quiz.body; startQuiz({ mode, kind, id }); },
   async ['quiz-quit']() {
     const Q = ui.quiz;
-    if (Q && !Q.result && Q.q && !await ask({ title: 'Quitter le quiz ?', text: Q.body.mode === 'daily' ? 'Le chrono continue : les questions non répondues compteront comme ratées.' : 'Ta partie s’arrête ici.', yes: 'Quitter', no: 'Continuer' })) return;
+    if (Q && !Q.result && Q.q && !await ask({ title: L('Quitter le quiz ?', 'Quit the quiz?'), text: Q.body.mode === 'daily' ? L('Le chrono continue : les questions non répondues compteront comme ratées.', 'The clock keeps running: unanswered questions will count as wrong.') : L('Ta partie s’arrête ici.', 'Your game ends here.'), yes: L('Quitter', 'Quit'), no: L('Continuer', 'Keep playing') })) return;
     clearTimeout(quizTimer); ui.quiz = null;
     ui.amisTab = 'games'; location.hash = '#/amis';
   },
@@ -2924,7 +2978,7 @@ const actions = {
   async ['reply-delete']({ rid }, el) {
     try {
       await collapse(el.closest('.reply'));
-      await post(`/api/replies/${rid}/delete`); invalidate('/api/title/'); rerender(); toast('Réponse effacée');
+      await post(`/api/replies/${rid}/delete`); invalidate('/api/title/'); rerender(); toast(L('Réponse effacée', 'Reply deleted'));
     } catch (err) { rerender(); fail(err); }
   },
 
@@ -2954,8 +3008,8 @@ const actions = {
       invalidate('/api/feed', '/api/users/', '/api/reviews/mine');
       rerender();
       replay(main.querySelector(`[data-act="review-delete"][data-dk="${dk}"]`)?.closest('.review'), 'glow');
-      if (canAskPush()) toast('Avis publié. Être prévenu des réponses ?', { label: 'Activer 🔔', run: () => enablePush().catch(fail) });
-      else toast('Avis publié pour tes amis');
+      if (canAskPush()) toast(L('Avis publié. Être prévenu des réponses ?', 'Review posted. Get notified of replies?'), { label: L('Activer 🔔', 'Turn on 🔔'), run: () => enablePush().catch(fail) });
+      else toast(L('Avis publié pour tes amis', 'Review posted for your friends'));
     } catch (err) { el.disabled = false; fail(err); }
   },
   async ['review-delete']({ dk, url }, el) {
@@ -2967,15 +3021,15 @@ const actions = {
       if (hit?.data) hit.data.mine = null;
       invalidate('/api/feed', '/api/users/', '/api/reviews/mine');
       rerender();
-      toast('Avis supprimé');
+      toast(L('Avis supprimé', 'Review deleted'));
     } catch (err) { rerender(); fail(err); }
   },
 
   install() { installApp(); },
 
   /* ----- avatar ----- */
-  async ['avatar-preset']({ n }) { await saveAvatar({ preset: Number(n) }, 'Avatar changé'); },
-  async ['avatar-clear']() { await saveAvatar({}, 'Avatar retiré'); },
+  async ['avatar-preset']({ n }) { await saveAvatar({ preset: Number(n) }, L('Avatar changé', 'Avatar changed')); },
+  async ['avatar-clear']() { await saveAvatar({}, L('Avatar retiré', 'Avatar removed')); },
 
   /* ----- conseils ----- */
   async ['reco-toggle']({ kind, id }, el) {
@@ -2984,12 +3038,12 @@ const actions = {
     try {
       await setPick(kind, id, on);
       if (on) flash(`[data-act="reco-toggle"][data-id="${id}"]`, 'done');
-      toast(on ? 'Ajouté aux suggestions de tous tes amis' : 'Tu ne le conseilles plus',
-        on ? { label: 'Annuler', run() { setPick(kind, id, false).catch(fail); } } : undefined);
+      toast(on ? L('Ajouté aux suggestions de tous tes amis', 'Added to all your friends’ suggestions') : L('Tu ne le conseilles plus', 'You no longer recommend it'),
+        on ? { label: L('Annuler', 'Undo'), run() { setPick(kind, id, false).catch(fail); } } : undefined);
     } catch (e) { el.disabled = false; fail(e); }
   },
   async ['reco-hide']({ kind, id }) {
-    try { await post('/api/recos/hide', { kind, id: Number(id) }); invalidate('/api/recos'); rerender(); toast('Retiré de tes suggestions'); }
+    try { await post('/api/recos/hide', { kind, id: Number(id) }); invalidate('/api/recos'); rerender(); toast(L('Retiré de tes suggestions', 'Removed from your suggestions')); }
     catch (e) { fail(e); }
   },
 
@@ -3006,7 +3060,7 @@ const actions = {
   },
   async ['grp-save']({ id }, btn) {
     const name = document.getElementById('grpName').value.trim();
-    if (!name) { document.getElementById('grpName').focus(); return toast('Donne un nom au groupe'); }
+    if (!name) { document.getElementById('grpName').focus(); return toast(L('Donne un nom au groupe', 'Give the group a name')); }
     btn.disabled = true;
     try {
       const r = await post(id ? `/api/groups/${id}` : '/api/groups', { name, emoji: ui.grpEmoji });
@@ -3014,13 +3068,13 @@ const actions = {
       if (!id) { setGroup(r.id); ui.amisTab = 'friends'; }
       grpEl.close();
       if (location.hash !== '#/amis') location.hash = '#/amis'; else rerender();
-      toast(id ? 'Groupe enregistré' : `Groupe ${ui.grpEmoji} ${name} créé : invite tes amis !`);
+      toast(id ? L('Groupe enregistré', 'Group saved') : L(`Groupe ${ui.grpEmoji} ${name} créé : invite tes amis !`, `Group ${ui.grpEmoji} ${name} created: invite your friends!`));
     } catch (e) { btn.disabled = false; fail(e); }
   },
   async ['grp-relink']({ id }) {
     grpEl.close();
-    if (!await ask({ title: 'Changer le lien ?', text: 'L’ancien lien d’invitation ne marchera plus. Les membres actuels restent dans le groupe.', yes: 'Changer le lien', no: 'Annuler' })) return;
-    try { storeGroups(await post(`/api/groups/${id}/relink`)); rerender(); toast('Nouveau lien prêt : touche « Inviter » pour l’envoyer'); }
+    if (!await ask({ title: L('Changer le lien ?', 'Change the link?'), text: L('L’ancien lien d’invitation ne marchera plus. Les membres actuels restent dans le groupe.', 'The old invite link will stop working. Current members stay in the group.'), yes: L('Changer le lien', 'Change link'), no: L('Annuler', 'Cancel') })) return;
+    try { storeGroups(await post(`/api/groups/${id}/relink`)); rerender(); toast(L('Nouveau lien prêt : touche « Inviter » pour l’envoyer', 'New link ready: tap “Invite” to send it')); }
     catch (e) { fail(e); }
   },
   async ['grp-leave']({ id }) {
@@ -3028,11 +3082,11 @@ const actions = {
     const g = (await groupsData()).groups.find(x => x.id === Number(id));
     if (!g) return;
     const last = g.members.length === 1;
-    if (!await ask({ title: `Quitter ${g.emoji} ${g.name} ?`, text: last ? 'Tu es le dernier membre : le groupe sera supprimé.' : 'Tu ne verras plus l’activité de ce groupe. Tu pourras revenir avec un lien d’invitation.', yes: 'Quitter le groupe', no: 'Rester' })) return;
+    if (!await ask({ title: L(`Quitter ${g.emoji} ${g.name} ?`, `Leave ${g.emoji} ${g.name}?`), text: last ? L('Tu es le dernier membre : le groupe sera supprimé.', 'You’re the last member: the group will be deleted.') : L('Tu ne verras plus l’activité de ce groupe. Tu pourras revenir avec un lien d’invitation.', 'You won’t see this group’s activity anymore. You can come back with an invite link.'), yes: L('Quitter le groupe', 'Leave group'), no: L('Rester', 'Stay') })) return;
     try {
       const res = await post(`/api/groups/${id}/leave`);
       await collapse(main.querySelector(`[data-act="grp-leave"][data-id="${id}"]`)?.closest('.gcard'));
-      storeGroups(res); setGroup('all'); rerender(); toast(`Tu as quitté ${g.name}`);
+      storeGroups(res); setGroup('all'); rerender(); toast(L(`Tu as quitté ${g.name}`, `You left ${g.name}`));
     }
     catch (e) { fail(e); }
   },
@@ -3049,7 +3103,7 @@ const actions = {
       storeGroups(await post(`/api/groups/${g}/add`, { userId: Number(u) }));
       grpEl.close();
       const name = (await groupsData()).groups.find(x => x.id === Number(g))?.name;
-      toast(`Ajouté à ${name}`);
+      toast(L(`Ajouté à ${name}`, `Added to ${name}`));
       rerender();
     } catch (e) { btn.disabled = false; fail(e); }
   },
@@ -3061,15 +3115,15 @@ const actions = {
     if (g) return shareInvite(g);
     if (!groups.length) return openGroupForm(null);
     if (groups.length === 1) return shareInvite(groups[0]);
-    openGroupPicker('Inviter dans quel groupe ?', 'Le lien fera entrer ton ami directement dans ce groupe.', groups, 'invite');
+    openGroupPicker(L('Inviter dans quel groupe ?', 'Invite to which group?'), L('Le lien fera entrer ton ami directement dans ce groupe.', 'The link will bring your friend straight into this group.'), groups, 'invite');
   },
   async ['user-addgroup']({ id, name }) {
     let groups;
     try { groups = (await groupsData()).groups; } catch (e) { return fail(e); }
     const free = groups.filter(g => !g.members.includes(Number(id)));
     if (!groups.length) return openGroupForm(null);
-    if (!free.length) return toast(`${name} est déjà dans tous tes groupes`);
-    openGroupPicker(`Ajouter ${name} à…`, '', free, 'group-add', `data-u="${id}"`);
+    if (!free.length) return toast(L(`${name} est déjà dans tous tes groupes`, `${name} is already in all your groups`));
+    openGroupPicker(L(`Ajouter ${name} à…`, `Add ${name} to…`), '', free, 'group-add', `data-u="${id}"`);
   },
 
   /* ----- recherche avancée ----- */
@@ -3145,13 +3199,13 @@ const actions = {
     try {
       const sub = await deviceSub();
       if (sub) { await post('/api/push/unsubscribe', { endpoint: sub.endpoint }); await sub.unsubscribe(); }
-      ui.pushOn = false; toast('Notifications coupées sur ce téléphone');
+      ui.pushOn = false; toast(L('Notifications coupées sur ce téléphone', 'Notifications off on this phone'));
     } catch (e) { fail(e); }
     rerender();
   },
   async ['push-test'](_, el) {
     el.disabled = true;
-    try { await post('/api/push/test'); toast('Envoyé : regarde tes notifications'); }
+    try { await post('/api/push/test'); toast(L('Envoyé : regarde tes notifications', 'Sent: check your notifications')); }
     catch (e) { fail(e); }
     el.disabled = false;
   },
@@ -3183,12 +3237,12 @@ const actions = {
   },
   ['forgot-back']() { ui.authMode = 'login'; ui.authMsg = ''; render(); },
   async ['admin-reset']({ id, name }, el) {
-    if (!await ask({ title: `Nouveau mot de passe pour ${name} ?`, text: 'Son mot de passe actuel ne marchera plus et ses appareils seront déconnectés. Tu verras le nouveau mot de passe provisoire pour le lui transmettre.', yes: 'Créer le mot de passe', no: 'Annuler' })) return;
+    if (!await ask({ title: L(`Nouveau mot de passe pour ${name} ?`, `New password for ${name}?`), text: L('Son mot de passe actuel ne marchera plus et ses appareils seront déconnectés. Tu verras le nouveau mot de passe provisoire pour le lui transmettre.', 'Their current password will stop working and their devices will be signed out. You’ll see the new temporary password so you can pass it on.'), yes: L('Créer le mot de passe', 'Create password'), no: L('Annuler', 'Cancel') })) return;
     el.disabled = true;
     try {
       const r = await post('/api/admin/reset', { userId: Number(id) });
       invalidate('/api/admin/accounts'); rerender();
-      await ask({ title: `Identifiants de ${r.name}`, text: `Pseudo : ${r.username}\nMot de passe provisoire : ${r.password}\n\nEnvoie-les-lui${r.email ? ` (${r.email})` : ''}. Il pourra changer le mot de passe dans Profil → Mon compte.`, yes: 'C’est noté' });
+      await ask({ title: L(`Identifiants de ${r.name}`, `${r.name}’s login`), text: L(`Pseudo : ${r.username}\nMot de passe provisoire : ${r.password}\n\nEnvoie-les-lui${r.email ? ` (${r.email})` : ''}. Il pourra changer le mot de passe dans Profil → Mon compte.`, `Username: ${r.username}\nTemporary password: ${r.password}\n\nSend them over${r.email ? ` (${r.email})` : ''}. They can change the password in Profile → My account.`), yes: L('C’est noté', 'Got it') });
     } catch (e) { fail(e); el.disabled = false; }
   },
   async ['admin-dismiss']({ id }) {
@@ -3197,18 +3251,18 @@ const actions = {
   async ['ann-remove']() {
     if (ui.confirm !== 'ann-remove') { armConfirm('ann-remove'); return rerender(); }
     ui.confirm = null;
-    try { mem.set('/api/admin/announcement', { t: Date.now(), data: await post('/api/admin/announcement/remove', {}) }); toast('Message retiré'); }
+    try { mem.set('/api/admin/announcement', { t: Date.now(), data: await post('/api/admin/announcement/remove', {}) }); toast(L('Message retiré', 'Message removed')); }
     catch (e) { fail(e); }
     rerender();
   },
   async ['share-app']() {
     const url = location.origin;
     if (navigator.share) {
-      try { await navigator.share({ title: 'what2watch', text: 'Rejoins-moi sur what2watch pour suivre nos séries et se conseiller des trucs à regarder :', url }); return; }
+      try { await navigator.share({ title: 'what2watch', text: L('Rejoins-moi sur what2watch pour suivre nos séries et se conseiller des trucs à regarder :', 'Join me on what2watch to track our shows and recommend each other stuff to watch:'), url }); return; }
       catch (e) { if (e.name === 'AbortError') return; }
     }
-    try { await navigator.clipboard.writeText(url); toast('Adresse copiée'); }
-    catch (e) { toast('Copie impossible : sélectionne l’adresse à la main.'); }
+    try { await navigator.clipboard.writeText(url); toast(L('Adresse copiée', 'Address copied')); }
+    catch (e) { toast(L('Copie impossible : sélectionne l’adresse à la main.', 'Can’t copy: select the address by hand.')); }
   },
 };
 
@@ -3265,7 +3319,7 @@ document.addEventListener('input', ev => {
   }
   if (t.id === 'advRate') {
     ui.advDraft.rating = Number(t.value);
-    document.getElementById('advRateTxt').textContent = ui.advDraft.rating ? `★ ${fmtScore(ui.advDraft.rating)}+` : 'Toutes';
+    document.getElementById('advRateTxt').textContent = ui.advDraft.rating ? `★ ${fmtScore(ui.advDraft.rating)}+` : L('Toutes', 'Any');
     return;
   }
   if (t.id === 'advPerson') return searchPeople(t.value);
@@ -3302,17 +3356,17 @@ document.addEventListener('submit', async ev => {
     try {
       const r = await post('/api/me', { name: f.elements.name.value });
       me = r.user; LS.set('sequence.me', me);
-      ui.accountMsg = '✓ Nom enregistré.';
+      ui.accountMsg = L('✓ Nom enregistré.', '✓ Name saved.');
     } catch (e) { ui.accountMsg = e.message; }
     document.activeElement?.blur(); rerender();
   }
   if (f.id === 'annForm') {
     const title = f.elements.title.value, text = f.elements.text.value;
-    if (!await ask({ title: 'Envoyer ce message ?', text: 'Tous les membres déjà inscrits le verront une fois, à leur prochaine ouverture de l’appli.', yes: 'Envoyer', no: 'Annuler' })) return;
+    if (!await ask({ title: L('Envoyer ce message ?', 'Send this message?'), text: L('Tous les membres déjà inscrits le verront une fois, à leur prochaine ouverture de l’appli.', 'Every member already signed up will see it once, the next time they open the app.'), yes: L('Envoyer', 'Send'), no: L('Annuler', 'Cancel') })) return;
     try {
       const r = await post('/api/admin/announcement', { title, text });
       mem.set('/api/admin/announcement', { t: Date.now(), data: r });
-      f.reset(); toast('Message envoyé');
+      f.reset(); toast(L('Message envoyé', 'Message sent'));
     } catch (e) { fail(e); }
     document.activeElement?.blur(); rerender();
   }
@@ -3328,11 +3382,11 @@ document.addEventListener('submit', async ev => {
     const val = f.elements.email.value;
     try {
       const r = await post('/api/me/email', { email: val });
-      if (!r.user.email) throw new Error('Entre ton adresse mail.');
+      if (!r.user.email) throw new Error(L('Entre ton adresse mail.', 'Enter your email address.'));
       me = { ...me, email: r.user.email }; LS.set('sequence.me', me);
       ui.mailInviteMsg = '';
       document.activeElement?.blur();
-      toast('✓ Adresse mail enregistrée, merci !');
+      toast(L('✓ Adresse mail enregistrée, merci !', '✓ Email address saved, thanks!'));
       await collapse(f.closest('.mail-invite'));
       rerender();
     } catch (e) {
@@ -3344,14 +3398,14 @@ document.addEventListener('submit', async ev => {
     try {
       const r = await post('/api/me/email', { email: f.elements.email.value });
       me = { ...me, email: r.user.email }; LS.set('sequence.me', me);
-      ui.accountMsg = r.user.email ? '✓ Adresse mail enregistrée.' : '✓ Adresse mail retirée.';
+      ui.accountMsg = r.user.email ? L('✓ Adresse mail enregistrée.', '✓ Email address saved.') : L('✓ Adresse mail retirée.', '✓ Email address removed.');
     } catch (e) { ui.accountMsg = e.message; }
     document.activeElement?.blur(); rerender();
   }
   if (f.id === 'passForm') {
     try {
       await post('/api/me/password', { current: f.elements.current.value, next: f.elements.next.value });
-      ui.accountMsg = '✓ Mot de passe changé. Tes autres appareils sont déconnectés.';
+      ui.accountMsg = L('✓ Mot de passe changé. Tes autres appareils sont déconnectés.', '✓ Password changed. Your other devices have been signed out.');
     } catch (e) { ui.accountMsg = e.message; }
     document.activeElement?.blur(); rerender();
   }
@@ -3381,7 +3435,7 @@ catchInvite();
 if (me) { loadLocal(); refreshMe(); updateBadge(); setTimeout(handleInvite, 300); }
 else {
   // Vérifie si une session existe déjà (cookie) avant d'afficher la connexion.
-  get('/api/me').then(r => { me = r.user; badges = r.badges; LS.set('sequence.me', me); loadLocal(); render(); updateBadge(); pull(); handleInvite(); showAnnouncement(r.announcement).then(() => showDuels(r.duels)).then(askEmail); }, () => {});
+  get('/api/me').then(r => { me = r.user; badges = r.badges; LS.set('sequence.me', me); if (syncLang(me)) return; loadLocal(); render(); updateBadge(); pull(); handleInvite(); showAnnouncement(r.announcement).then(() => showDuels(r.duels)).then(askEmail); }, () => {});
 }
 render();
 clearNotifs();

@@ -1052,3 +1052,7 @@ body.focus-mode #app { padding-bottom: 0; }
 @supports (-webkit-touch-callout: none) {
   input, textarea, select, .input, .reply-box textarea { font-size: 16px !important; }
 }
+
+/* Choix de la langue sous la carte de connexion. */
+.lang-pick { display: flex; justify-content: center; }
+.lang-pick .seg { min-width: 220px; }

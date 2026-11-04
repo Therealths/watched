@@ -239,6 +239,8 @@ function openDb(dir) {
   if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'avatar'").get()) db.exec('ALTER TABLE users ADD COLUMN avatar TEXT');
   // Adresse mail : seulement pour retrouver son pseudo ou son mot de passe (jamais montrée aux autres membres).
   if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'email'").get()) db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+  // Langue de l'appli choisie dans le profil ('fr' par défaut, ou 'en').
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'lang'").get()) db.exec("ALTER TABLE users ADD COLUMN lang TEXT NOT NULL DEFAULT 'fr'");
   db.exec(`CREATE TABLE IF NOT EXISTS reset_requests (
       id INTEGER PRIMARY KEY,
       email TEXT NOT NULL,

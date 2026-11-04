@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { openDb } = require('./db');
 const { initPush } = require('./push');
 const { createQuiz } = require('./quiz');
+const { cleanLang, lang, withLang, tr, num, loc, errorText } = require('./i18n');
 
 const ROOT = path.resolve(__dirname, '..');
 loadEnv(path.join(ROOT, '.env'));
@@ -93,11 +94,39 @@ async function ensureTitle(kind, id, maxAge = Infinity) {
   try {
     const d = await tmdb(`/${kind}/${id}`, kind === 'movie' ? { append_to_response: 'release_dates' } : {}, 0);
     const meta = kind === 'tv' ? slimShow(d) : slimMovie(d);
+    meta.en = await englishNames(kind, id).catch(() => row && JSON.parse(row.meta).en) || null;
     putTitle.run(kind, id, JSON.stringify(meta), Date.now());
     return meta;
   } catch (e) {
     if (row) return JSON.parse(row.meta);
     throw e;
+  }
+}
+
+// Noms en anglais (titre, prochain et dernier épisode), pour les membres qui ont choisi l'anglais.
+async function englishNames(kind, id) {
+  const d = await tmdb(`/${kind}/${id}`, { language: 'en-US' }, 0);
+  return kind === 'tv' ? { name: d.name, last: d.last_episode_to_air?.name || '', next: d.next_episode_to_air?.name || '' } : { title: d.title };
+}
+// Fiche dans la langue de la requête en cours.
+function locMeta(m) {
+  if (!m) return m;
+  const { en, ...rest } = m;
+  if (lang() !== 'en' || !en) return rest;
+  if (rest.title !== undefined && en.title) rest.title = en.title;
+  if (rest.name !== undefined && en.name) rest.name = en.name;
+  if (rest.last && en.last) rest.last = { ...rest.last, name: en.last };
+  if (rest.next && en.next) rest.next = { ...rest.next, name: en.next };
+  return rest;
+}
+// Titres enregistrés avant l'arrivée de l'anglais : on va chercher leurs noms anglais, doucement.
+async function backfillEnglish() {
+  for (const r of db.prepare('SELECT kind, id, meta FROM titles').all()) {
+    const m = JSON.parse(r.meta);
+    if ('en' in m) continue;
+    try { m.en = await englishNames(r.kind, r.id); } catch { continue; }
+    db.prepare('UPDATE titles SET meta = ? WHERE kind = ? AND id = ?').run(JSON.stringify(m), r.kind, r.id);
+    await new Promise(res => setTimeout(res, 250));
   }
 }
 
@@ -155,7 +184,7 @@ function readSid(req) {
 function sessionUser(req) {
   const sid = readSid(req);
   if (!sid) return null;
-  const row = db.prepare(`SELECT s.token, s.seen_at, u.id, u.username, u.name, u.avatar, u.email, u.created_at FROM sessions s
+  const row = db.prepare(`SELECT s.token, s.seen_at, u.id, u.username, u.name, u.avatar, u.email, u.created_at, u.lang FROM sessions s
     JOIN users u ON u.id = s.user_id WHERE s.token = ?`).get(sha256(sid));
   if (!row) return null;
   if (Date.now() - row.seen_at > SESSION_MAX_AGE) {
@@ -163,7 +192,7 @@ function sessionUser(req) {
     return null;
   }
   if (Date.now() - row.seen_at > DAY) db.prepare('UPDATE sessions SET seen_at = ? WHERE token = ?').run(Date.now(), row.token);
-  return { id: row.id, username: row.username, name: row.name, avatar: row.avatar, email: row.email, created_at: row.created_at, token: row.token };
+  return { id: row.id, username: row.username, name: row.name, avatar: row.avatar, email: row.email, created_at: row.created_at, lang: row.lang || 'fr', token: row.token };
 }
 
 // Limite les tentatives (connexion, inscription) par adresse IP.
@@ -196,7 +225,7 @@ function usersById(ids) {
 }
 function titleMeta(kind, id) {
   const row = getTitle.get(kind === 'ep' ? 'tv' : kind, id);
-  return row ? JSON.parse(row.meta) : null;
+  return row ? locMeta(JSON.parse(row.meta)) : null;
 }
 function brief(kind, id) {
   const m = titleMeta(kind, id);
@@ -208,7 +237,7 @@ function userState(uid) {
   const shows = {};
   for (const r of db.prepare(`SELECT us.show_id, us.added_at, us.archived, t.meta, t.updated_at FROM user_shows us
       JOIN titles t ON t.kind = 'tv' AND t.id = us.show_id WHERE us.user_id = ?`).all(uid)) {
-    shows[r.show_id] = { ...JSON.parse(r.meta), addedAt: r.added_at, archived: !!r.archived, updatedAt: r.updated_at, watched: {} };
+    shows[r.show_id] = { ...locMeta(JSON.parse(r.meta)), addedAt: r.added_at, archived: !!r.archived, updatedAt: r.updated_at, watched: {} };
   }
   for (const w of db.prepare('SELECT show_id, s, e, at FROM watched WHERE user_id = ?').all(uid)) {
     if (shows[w.show_id]) shows[w.show_id].watched[w.s + 'x' + w.e] = w.at;
@@ -216,7 +245,7 @@ function userState(uid) {
   const movies = {};
   for (const r of db.prepare(`SELECT um.*, t.meta FROM user_movies um
       JOIN titles t ON t.kind = 'movie' AND t.id = um.movie_id WHERE um.user_id = ?`).all(uid)) {
-    movies[r.movie_id] = { ...JSON.parse(r.meta), status: r.status, addedAt: r.added_at, watchedAt: r.watched_at };
+    movies[r.movie_id] = { ...locMeta(JSON.parse(r.meta)), status: r.status, addedAt: r.added_at, watchedAt: r.watched_at };
   }
   return { shows, movies };
 }
@@ -312,13 +341,14 @@ route('POST', /^\/api\/register$/, async ({ req, res, body }) => {
   const email = cleanEmail(body.email, true);
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) throw httpError(409, 'Ce pseudo est déjà pris.');
   checkNameFree(name);
-  const { lastInsertRowid } = db.prepare('INSERT INTO users (username, name, pass, email, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(username, name, hashPassword(password), email, Date.now());
+  const lg = cleanLang(body.lang);
+  const { lastInsertRowid } = db.prepare('INSERT INTO users (username, name, pass, email, lang, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(username, name, hashPassword(password), email, lg, Date.now());
   // Inscription depuis un lien d'invitation : on entre directement dans le groupe.
   const g = body.invite && groupByInvite(String(body.invite));
   if (g) joinGroup(g.id, Number(lastInsertRowid));
   createSession(res, req, Number(lastInsertRowid));
-  return { user: { id: Number(lastInsertRowid), username, name, email } };
+  return { user: { id: Number(lastInsertRowid), username, name, email, lang: lg } };
 }, { auth: false });
 
 route('POST', /^\/api\/login$/, async ({ req, res, body }) => {
@@ -327,7 +357,7 @@ route('POST', /^\/api\/login$/, async ({ req, res, body }) => {
   const u = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (!u || !checkPassword(String(body.password || ''), u.pass)) throw httpError(401, 'Pseudo ou mot de passe incorrect.');
   createSession(res, req, u.id);
-  return { user: { ...publicUser(u), email: u.email || null } };
+  return { user: { ...publicUser(u), email: u.email || null, lang: u.lang } };
 }, { auth: false });
 
 // Pseudo ou mot de passe oublié : la demande arrive chez l'administrateur, qui donne un mot de passe provisoire.
@@ -338,7 +368,7 @@ route('POST', /^\/api\/forgot$/, async ({ req, body }) => {
   if (!db.prepare('SELECT 1 FROM reset_requests WHERE email = ? AND done_at IS NULL').get(email)) {
     db.prepare('INSERT INTO reset_requests (email, at) VALUES (?, ?)').run(email, Date.now());
     const admin = db.prepare('SELECT MIN(id) id FROM users').get().id;
-    notify(admin, null, null, { title: '🔑 Identifiants oubliés', body: `Quelqu’un (${email}) demande de l’aide pour se reconnecter.`, url: '#/profil', tag: 'forgot' });
+    notify(admin, null, null, () => ({ title: tr('🔑 Identifiants oubliés', '🔑 Forgotten login'), body: tr(`Quelqu’un (${email}) demande de l’aide pour se reconnecter.`, `Someone (${email}) needs help signing back in.`), url: '#/profil', tag: 'forgot' }));
   }
   return { ok: true };
 }, { auth: false });
@@ -360,7 +390,7 @@ route('GET', /^\/api\/me$/, async ({ user }) => {
   const duels = db.prepare(`SELECT c.id, c.from_id, u.name, c.kind, c.tid, c.score, c.correct, c.total FROM quiz_challenges c
     JOIN users u ON u.id = c.from_id WHERE c.to_id = ? AND c.done_at IS NULL ORDER BY c.created_at DESC LIMIT 10`).all(user.id)
     .map(c => ({ id: c.id, from: c.name, title: brief(c.kind, c.tid).name, score: c.score, correct: c.correct, total: c.total }));
-  return { user: { ...publicUser(user), email: user.email || null, admin: admin || undefined },
+  return { user: { ...publicUser(user), email: user.email || null, lang: user.lang, admin: admin || undefined },
     badges: { requests: 0, recos, duels: duels.length, quiz: playedDaily(user.id, localDay()) ? 0 : 1 }, announcement: ann || null, duels };
 });
 
@@ -419,12 +449,18 @@ route('POST', /^\/api\/admin\/announcement\/remove$/, async ({ user }) => {
   return { announcement: null };
 });
 
+route('POST', /^\/api\/me\/lang$/, async ({ user, body }) => {
+  const lg = cleanLang(body.lang);
+  db.prepare('UPDATE users SET lang = ? WHERE id = ?').run(lg, user.id);
+  return { lang: lg };
+});
+
 route('POST', /^\/api\/me$/, async ({ user, body }) => {
   const name = String(body.name || '').trim().slice(0, 40);
   if (!name) throw httpError(400, 'Le nom ne peut pas être vide.');
   checkNameFree(name, user.id);
   db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, user.id);
-  return { user: { ...publicUser(user), email: user.email || null, name } };
+  return { user: { ...publicUser(user), email: user.email || null, lang: user.lang, name } };
 });
 
 route('POST', /^\/api\/me\/email$/, async ({ user, body }) => {
@@ -509,6 +545,7 @@ route('GET', /^\/api\/tmdb(\/.*)$/, async ({ match, url }) => {
   if (!TMDB_PATHS.test(p)) throw httpError(404, 'Ressource inconnue.');
   const params = {};
   for (const k of TMDB_PARAMS) if (url.searchParams.has(k)) params[k] = url.searchParams.get(k).slice(0, 100);
+  if (lang() === 'en') params.language = 'en-US';
   return tmdb(p, params);
 });
 
@@ -685,10 +722,13 @@ route('POST', /^\/api\/replies$/, async ({ user, body }) => {
   const { lastInsertRowid } = db.prepare('INSERT INTO review_replies (author_id, kind, tid, s, e, user_id, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(author, kind, id, s, e, user.id, text, Date.now());
   if (author !== user.id) {
-    const t = brief(kind === 'movie' ? 'movie' : 'tv', id);
-    notify(author, 'replies', `reply:${lastInsertRowid}`, {
-      title: `💬 ${user.name} a répondu à ton avis sur ${kind === 'ep' ? `S${s}E${e} de ` : ''}${t.name}`,
-      body: text, url: kind === 'ep' ? `#/ep/${id}/${s}/${e}` : `#/${kind}/${id}`, tag: `reply-${kind}-${id}-${s}-${e}`,
+    notify(author, 'replies', `reply:${lastInsertRowid}`, () => {
+      const t = brief(kind === 'movie' ? 'movie' : 'tv', id);
+      return {
+        title: tr(`💬 ${user.name} a répondu à ton avis sur ${kind === 'ep' ? `S${s}E${e} de ` : ''}${t.name}`,
+          `💬 ${user.name} replied to your review of ${kind === 'ep' ? `S${s}E${e} of ` : ''}${t.name}`),
+        body: text, url: kind === 'ep' ? `#/ep/${id}/${s}/${e}` : `#/${kind}/${id}`, tag: `reply-${kind}-${id}-${s}-${e}`,
+      };
     });
   }
   return { id: Number(lastInsertRowid) };
@@ -748,13 +788,12 @@ route('POST', /^\/api\/recos$/, async ({ user, body }) => {
   db.prepare(`INSERT INTO picks (user_id, kind, tid, message, created_at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (user_id, kind, tid) DO UPDATE SET message = excluded.message`).run(user.id, kind, id, message, Date.now());
   if (isNew) {
-    const t = brief(kind, id);
     for (const { user_id } of db.prepare(GROUP_MATES_SQL).all({ u: user.id })) {
-      notify(user_id, 'recos', `pick:${user.id}:${kind}:${id}`, {
-        title: `💡 ${user.name} te conseille ${t.name}`,
-        body: message || (kind === 'tv' ? 'Une série à découvrir.' : 'Un film à découvrir.'),
+      notify(user_id, 'recos', `pick:${user.id}:${kind}:${id}`, () => ({
+        title: tr(`💡 ${user.name} te conseille ${brief(kind, id).name}`, `💡 ${user.name} recommends ${brief(kind, id).name}`),
+        body: message || (kind === 'tv' ? tr('Une série à découvrir.', 'A show to check out.') : tr('Un film à découvrir.', 'A movie to check out.')),
         url: `#/${kind}/${id}`, tag: `pick-${kind}-${id}`,
-      });
+      }));
     }
   }
   return { on: true };
@@ -865,10 +904,12 @@ function notifPrefs(uid) {
   return Object.fromEntries(NOTIF_KINDS.map(k => [k, p[k] !== false]));
 }
 // Envoie à tous les appareils du membre, si ce type est activé et pas déjà envoyé (clé unique).
+// Le message peut être une fonction : elle est alors écrite dans la langue du membre qui le reçoit.
 function notify(uid, kind, key, msg) {
   const subs = db.prepare('SELECT * FROM push_subs WHERE user_id = ?').all(uid);
   if (!subs.length || (kind && !notifPrefs(uid)[kind])) return;
   if (key && !db.prepare('INSERT OR IGNORE INTO notif_log (user_id, key, at) VALUES (?, ?, ?)').run(uid, key, Date.now()).changes) return;
+  if (typeof msg === 'function') msg = withLang(db.prepare('SELECT lang FROM users WHERE id = ?').get(uid)?.lang, msg);
   for (const sub of subs) {
     push.sendOne(sub, msg).then(r => {
       if (r === 'gone') db.prepare('DELETE FROM push_subs WHERE endpoint = ?').run(sub.endpoint);
@@ -878,12 +919,17 @@ function notify(uid, kind, key, msg) {
 
 function notifyReaction(owner, user, emoji, item) {
   const [type, , a, b, c, d] = item.split(':');
-  let what;
-  if (type === 'eps') what = `ce que tu as regardé (${brief('tv', Number(a)).name})`;
-  else if (type === 'movie') what = `ton film vu (${brief('movie', Number(a)).name})`;
-  else if (type === 'quiz') what = 'ton score au quiz';
-  else what = `ton avis sur ${a === 'ep' ? `S${c}E${d} de ` : ''}${brief(a === 'movie' ? 'movie' : 'tv', Number(b)).name}`;
-  notify(owner, 'reactions', `react:${item}:${user.id}`, { title: `${emoji} ${user.name} a réagi`, body: `À ${what}`, url: '#/amis', tag: 'react' });
+  notify(owner, 'reactions', `react:${item}:${user.id}`, () => {
+    let what;
+    if (type === 'eps') what = tr(`À ce que tu as regardé (${brief('tv', Number(a)).name})`, `To what you watched (${brief('tv', Number(a)).name})`);
+    else if (type === 'movie') what = tr(`À ton film vu (${brief('movie', Number(a)).name})`, `To the movie you watched (${brief('movie', Number(a)).name})`);
+    else if (type === 'quiz') what = tr('À ton score au quiz', 'To your quiz score');
+    else {
+      const t = brief(a === 'movie' ? 'movie' : 'tv', Number(b)).name;
+      what = tr(`À ton avis sur ${a === 'ep' ? `S${c}E${d} de ` : ''}${t}`, `To your review of ${a === 'ep' ? `S${c}E${d} of ` : ''}${t}`);
+    }
+    return { title: tr(`${emoji} ${user.name} a réagi`, `${emoji} ${user.name} reacted`), body: what, url: '#/amis', tag: 'react' };
+  });
 }
 
 // Nouveaux épisodes du jour pour les séries suivies : un seul message le matin (à partir de 9 h).
@@ -900,11 +946,12 @@ function sendQuizAlerts() {
     const mates = db.prepare(GROUP_MATES_SQL).all({ u: user_id }).map(r => Number(r.user_id));
     const lead = mates.length && db.prepare(`SELECT u.name, r.score FROM quiz_runs r JOIN users u ON u.id = r.user_id
       WHERE r.mode = 'daily' AND r.day = ? AND r.finished_at IS NOT NULL AND r.user_id IN (${mates.join(',')}) ORDER BY r.score DESC LIMIT 1`).get(day);
-    notify(user_id, 'quiz', `quiz:${day}`, {
-      title: '🎯 Le quiz du jour est prêt',
-      body: lead ? `${lead.name} mène avec ${lead.score.toLocaleString('fr-FR')} pts. À toi de jouer !` : '10 questions sur les séries et films de la bande. Sois le premier à jouer !',
+    notify(user_id, 'quiz', `quiz:${day}`, () => ({
+      title: tr('🎯 Le quiz du jour est prêt', '🎯 Today’s quiz is ready'),
+      body: lead ? tr(`${lead.name} mène avec ${num(lead.score)} pts. À toi de jouer !`, `${lead.name} leads with ${num(lead.score)} pts. Your turn!`)
+        : tr('10 questions sur les séries et films de la bande. Sois le premier à jouer !', '10 questions on the shows and movies your crew watches. Be the first to play!'),
       url: '#/amis/jeux', tag: 'quiz',
-    });
+    }));
   }
 }
 setInterval(sendQuizAlerts, 10 * 60e3);
@@ -926,10 +973,14 @@ async function sendEpisodeAlerts() {
     if (!fresh.length) continue;
     for (const { m, ep } of fresh) db.prepare('INSERT OR IGNORE INTO notif_log (user_id, key, at) VALUES (?, ?, ?)').run(user_id, `ep:${m.id}:${ep.s}:${ep.e}`, Date.now());
     const one = fresh.length === 1 ? fresh[0] : null;
-    notify(user_id, null, null, one
-      ? { title: `📺 Nouvel épisode de ${one.m.name}`, body: `S${one.ep.s}E${one.ep.e}${one.ep.name ? ' · ' + one.ep.name : ''} sort aujourd’hui.`,
-          url: `#/ep/${one.m.id}/${one.ep.s}/${one.ep.e}`, tag: 'episodes' }
-      : { title: `📺 ${fresh.length} nouveaux épisodes aujourd’hui`, body: fresh.map(x => x.m.name).join(', '), url: '#/collection', tag: 'episodes' });
+    notify(user_id, null, null, () => {
+      const list = fresh.map(x => ({ ...x, m: locMeta(x.m) }));
+      const o = one && list[0], epName = o && (o.m.last?.e === o.ep.e && o.m.last?.s === o.ep.s ? o.m.last.name : o.m.next?.e === o.ep.e && o.m.next?.s === o.ep.s ? o.m.next.name : o.ep.name);
+      return o
+        ? { title: tr(`📺 Nouvel épisode de ${o.m.name}`, `📺 New episode of ${o.m.name}`), body: tr(`S${o.ep.s}E${o.ep.e}${epName ? ' · ' + epName : ''} sort aujourd’hui.`, `S${o.ep.s}E${o.ep.e}${epName ? ' · ' + epName : ''} comes out today.`),
+            url: `#/ep/${o.m.id}/${o.ep.s}/${o.ep.e}`, tag: 'episodes' }
+        : { title: tr(`📺 ${list.length} nouveaux épisodes aujourd’hui`, `📺 ${list.length} new episodes today`), body: list.map(x => x.m.name).join(', '), url: '#/collection', tag: 'episodes' };
+    });
   }
   db.prepare('DELETE FROM notif_log WHERE at < ?').run(Date.now() - 60 * DAY);
 }
@@ -963,7 +1014,7 @@ route('POST', /^\/api\/push\/test$/, async ({ user }) => {
   rateLimit('pushtest:' + user.id, 10, 3600e3);
   const subs = db.prepare('SELECT * FROM push_subs WHERE user_id = ?').all(user.id);
   if (!subs.length) throw httpError(400, 'Aucun appareil abonné.');
-  const out = await Promise.allSettled(subs.map(sub => push.sendOne(sub, { title: '🍿 Ça marche !', body: 'Tu recevras tes notifications what2watch ici.', url: '#/profil', tag: 'test' })
+  const out = await Promise.allSettled(subs.map(sub => push.sendOne(sub, { title: tr('🍿 Ça marche !', '🍿 It works!'), body: tr('Tu recevras tes notifications what2watch ici.', 'You’ll get your what2watch notifications here.'), url: '#/profil', tag: 'test' })
     .then(r => { if (r === 'gone') db.prepare('DELETE FROM push_subs WHERE endpoint = ?').run(sub.endpoint); return r; })));
   if (!out.some(r => r.status === 'fulfilled' && r.value === 'ok')) throw httpError(502, 'Le service de notifications n’a pas répondu.');
   return { ok: true };
@@ -973,7 +1024,7 @@ route('POST', /^\/api\/push\/test$/, async ({ user }) => {
 const quiz = createQuiz({ tmdb });
 const QUIZ_LIMIT = 15e3, QUIZ_GRACE = 3e3;
 const runQuestions = run => JSON.parse(run.mode === 'daily' ? db.prepare('SELECT questions FROM quiz_daily WHERE day = ?').get(run.day).questions : run.questions);
-const quizTitle = run => run.mode === 'daily' ? 'Quiz du jour' : brief(run.kind, run.tid).name;
+const quizTitle = run => run.mode === 'daily' ? tr('Quiz du jour', 'Daily quiz') : brief(run.kind, run.tid).name;
 // Titres les plus regardés de l'appli (pour le quiz du jour).
 function popularTitles() {
   return db.prepare(`SELECT 'tv' kind, show_id id, COUNT(DISTINCT user_id) n FROM watched GROUP BY show_id
@@ -1000,11 +1051,11 @@ route('POST', /^\/api\/quiz\/start$/, async ({ user, body }) => {
   if (body.mode === 'daily') {
     const done = db.prepare(`SELECT * FROM quiz_runs WHERE user_id = ? AND day = ? AND mode = 'daily'`).get(user.id, day);
     if (done?.finished_at) throw httpError(409, 'Tu as déjà joué au quiz du jour. Reviens demain !');
-    if (done) return { id: done.id, total: done.total, title: 'Quiz du jour' };
+    if (done) return { id: done.id, total: done.total, title: tr('Quiz du jour', 'Daily quiz') };
     await ensureDaily(day);
     const total = JSON.parse(db.prepare('SELECT questions FROM quiz_daily WHERE day = ?').get(day).questions).length;
     const { lastInsertRowid } = db.prepare(`INSERT INTO quiz_runs (user_id, mode, day, total, created_at) VALUES (?, 'daily', ?, ?, ?)`).run(user.id, day, total, Date.now());
-    return { id: Number(lastInsertRowid), total, title: 'Quiz du jour' };
+    return { id: Number(lastInsertRowid), total, title: tr('Quiz du jour', 'Daily quiz') };
   }
   let kind = body.kind === 'movie' ? 'movie' : body.kind === 'tv' ? 'tv' : null;
   let id = body.id == null ? 0 : int(body.id, 'id');
@@ -1027,7 +1078,7 @@ route('POST', /^\/api\/quiz\/start$/, async ({ user, body }) => {
   const { lastInsertRowid } = db.prepare(`INSERT INTO quiz_runs (user_id, mode, day, kind, tid, questions, total, created_at) VALUES (?, 'free', ?, ?, ?, ?, ?, ?)`)
     .run(user.id, day, kind, id, JSON.stringify(questions), questions.length, Date.now());
   if (ch) db.prepare('UPDATE quiz_challenges SET reply_run = ? WHERE id = ?').run(Number(lastInsertRowid), ch.id);
-  return { id: Number(lastInsertRowid), total: questions.length, title, kind, tid: id };
+  return { id: Number(lastInsertRowid), total: questions.length, title: loc(title), kind, tid: id };
 });
 
 // Question en cours : le chrono démarre côté serveur à la première demande (recharger la page ne le remet pas à zéro).
@@ -1038,7 +1089,7 @@ route('POST', /^\/api\/quiz\/(\d+)\/next$/, async ({ user, match }) => {
   const qx = runQuestions(run)[i];
   let served = run.served_at;
   if (!served) { served = Date.now(); db.prepare('UPDATE quiz_runs SET served_at = ? WHERE id = ?').run(served, run.id); }
-  return { i, total: run.total, score: run.score, title: quizTitle(run), q: { t: qx.t, x: qx.x || null, img: qx.img || null, imgKind: qx.imgKind || null, c: qx.c },
+  return { i, total: run.total, score: run.score, title: quizTitle(run), q: loc({ t: qx.t, x: qx.x || null, img: qx.img || null, imgKind: qx.imgKind || null, c: qx.c }),
     limit: QUIZ_LIMIT, left: Math.max(0, QUIZ_LIMIT - (Date.now() - served)) };
 });
 
@@ -1078,21 +1129,21 @@ function finishRun(run, user) {
     const won = run.score > ch.score;
     const from = db.prepare('SELECT name FROM users WHERE id = ?').get(ch.from_id);
     duel = { won, tie: run.score === ch.score, name: from?.name || '?', score: ch.score, correct: ch.correct, total: ch.total };
-    notify(ch.from_id, 'games', `duel:${ch.id}`, {
-      title: won ? `😱 ${user.name} a relevé ton défi !` : run.score === ch.score ? `🤝 Égalité avec ${user.name} !` : `😎 ${user.name} n’a pas battu ton score`,
-      body: `Quiz ${brief(ch.kind, ch.tid).name} : ${run.correct}/${run.total} · ${run.score} pts (toi : ${ch.score} pts).`,
+    notify(ch.from_id, 'games', `duel:${ch.id}`, () => ({
+      title: won ? tr(`😱 ${user.name} a relevé ton défi !`, `😱 ${user.name} beat your challenge!`) : run.score === ch.score ? tr(`🤝 Égalité avec ${user.name} !`, `🤝 It’s a tie with ${user.name}!`) : tr(`😎 ${user.name} n’a pas battu ton score`, `😎 ${user.name} didn’t beat your score`),
+      body: tr(`Quiz ${brief(ch.kind, ch.tid).name} : ${run.correct}/${run.total} · ${run.score} pts (toi : ${ch.score} pts).`, `${brief(ch.kind, ch.tid).name} quiz: ${run.correct}/${run.total} · ${run.score} pts (you: ${ch.score} pts).`),
       url: '#/amis/jeux', tag: `duel-${ch.id}`,
-    });
+    }));
   }
   const best = db.prepare(`SELECT user_id, MAX(score) score, correct FROM quiz_runs WHERE mode = 'free' AND kind = ? AND tid = ? AND finished_at IS NOT NULL AND id != ? AND ${inCircle}
     GROUP BY user_id ORDER BY score DESC`).all(run.kind, run.tid, run.id);
   const king = best[0];
   const myPrev = best.find(b => b.user_id === user.id)?.score || 0;
   if (king && king.user_id !== user.id && run.score > king.score) {
-    notify(king.user_id, 'games', `beat:${run.id}`, {
-      title: `🏆 ${user.name} a battu ton score au quiz ${brief(run.kind, run.tid).name}`,
-      body: `${run.correct}/${run.total} · ${run.score} points. À toi de reprendre ta place !`, url: `#/${run.kind}/${run.tid}`, tag: `beat-${run.kind}-${run.tid}`,
-    });
+    notify(king.user_id, 'games', `beat:${run.id}`, () => ({
+      title: tr(`🏆 ${user.name} a battu ton score au quiz ${brief(run.kind, run.tid).name}`, `🏆 ${user.name} beat your score on the ${brief(run.kind, run.tid).name} quiz`),
+      body: tr(`${run.correct}/${run.total} · ${run.score} points. À toi de reprendre ta place !`, `${run.correct}/${run.total} · ${run.score} points. Go take your spot back!`), url: `#/${run.kind}/${run.tid}`, tag: `beat-${run.kind}-${run.tid}`,
+    }));
   }
   return { king: !king || run.score > king.score, record: run.score > myPrev, prev: myPrev || null, duel };
 }
@@ -1106,16 +1157,15 @@ route('POST', /^\/api\/challenges$/, async ({ user, body }) => {
   const to = [...new Set((Array.isArray(body.to) ? body.to : []).map(Number))].filter(x => mates.has(x)).slice(0, 30);
   if (!to.length) throw httpError(400, 'Choisis au moins un ami.');
   rateLimit('duel:' + user.id, 60, 3600e3);
-  const name = brief(kind, id).name;
   for (const uid of to) {
     // Un seul défi en cours par ami et par titre : le nouveau remplace l'ancien.
     db.prepare('DELETE FROM quiz_challenges WHERE from_id = ? AND to_id = ? AND kind = ? AND tid = ? AND done_at IS NULL').run(user.id, uid, kind, id);
     const { lastInsertRowid } = db.prepare(`INSERT INTO quiz_challenges (from_id, to_id, kind, tid, score, correct, total, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(user.id, uid, kind, id, best.score, best.correct, best.total, Date.now());
-    notify(uid, 'games', `chal:${lastInsertRowid}`, {
-      title: `⚔️ ${user.name} te défie au quiz ${name}`,
-      body: `${best.correct}/${best.total} · ${best.score} pts. À toi de faire mieux !`, url: '#/amis/jeux', tag: `chal-${kind}-${id}`,
-    });
+    notify(uid, 'games', `chal:${lastInsertRowid}`, () => ({
+      title: tr(`⚔️ ${user.name} te défie au quiz ${brief(kind, id).name}`, `⚔️ ${user.name} challenges you on the ${brief(kind, id).name} quiz`),
+      body: tr(`${best.correct}/${best.total} · ${best.score} pts. À toi de faire mieux !`, `${best.correct}/${best.total} · ${best.score} pts. Can you do better?`), url: '#/amis/jeux', tag: `chal-${kind}-${id}`,
+    }));
   }
   return { sent: to.length };
 });
@@ -1237,19 +1287,25 @@ const server = http.createServer(async (req, res) => {
     // Les écritures exigent du JSON : bloque les formulaires envoyés depuis d'autres sites.
     if (req.method === 'POST' && !(req.headers['content-type'] || '').startsWith('application/json')) throw httpError(415, 'JSON attendu.');
     const user = sessionUser(req);
-    if (r.auth && !user) throw httpError(401, 'Connecte-toi pour continuer.');
-    const body = req.method === 'POST' ? await readBody(req) : {};
-    const data = await r.handler({ req, res, url, body, user, match: url.pathname.match(r.pattern) });
-    if (!res.writableEnded) send(res, 200, data);   // certaines routes (images) répondent elles-mêmes
+    // Langue de l'appli qui demande (elle l'envoie à chaque requête), sinon celle du profil.
+    const lg = req.headers['x-lang'] ? cleanLang(req.headers['x-lang']) : user?.lang || 'fr';
+    await withLang(lg, async () => {
+      if (r.auth && !user) throw httpError(401, 'Connecte-toi pour continuer.');
+      const body = req.method === 'POST' ? await readBody(req) : {};
+      const data = await r.handler({ req, res, url, body, user, match: url.pathname.match(r.pattern) });
+      if (!res.writableEnded) send(res, 200, data);   // certaines routes (images) répondent elles-mêmes
+    });
   } catch (e) {
     const status = e.status || 500;
     if (status === 500) console.error(e);
-    send(res, status, { error: status === 500 ? 'Erreur du serveur.' : e.message });
+    const lg = req.headers['x-lang'] ? cleanLang(req.headers['x-lang']) : 'fr';
+    send(res, status, { error: errorText(status === 500 ? 'Erreur du serveur.' : e.message, lg) });
   }
 });
 
 server.listen(PORT, HOST, () => console.log(`what2watch en marche sur http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`));
 
 setTimeout(refreshTitles, 10e3);
+setTimeout(() => backfillEnglish().catch(e => console.warn('Noms anglais :', e.message)), 60e3);
 setInterval(refreshTitles, 3600e3);
 setInterval(() => db.prepare('DELETE FROM sessions WHERE seen_at < ?').run(Date.now() - SESSION_MAX_AGE), DAY);
