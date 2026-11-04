@@ -2383,7 +2383,10 @@ function rerender() {
   // Garde la hauteur de la page pendant que les images se réaffichent, sinon le navigateur remonte en haut.
   main.style.minHeight = main.offsetHeight + 'px';
   const bars = [...main.querySelectorAll('.bar i')].map(b => b.style.width);
+  // Les rangées qui défilent de côté (affiches, filtres) gardent leur position au lieu de revenir au début.
+  const sides = [...main.querySelectorAll('.rail, .gchips')].map(r => r.scrollLeft);
   render();
+  main.querySelectorAll('.rail, .gchips').forEach((r, i) => { if (sides[i]) r.scrollLeft = sides[i]; });
   scrollTo(0, y);
   growBars(bars);
   clearTimeout(rerender.release);
