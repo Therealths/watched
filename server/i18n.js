@@ -72,6 +72,7 @@ const ERRORS = {
   'Seul le créateur du groupe peut retirer quelqu’un.': 'Only the group’s creator can remove someone.',
   'Statut de film invalide.': 'Invalid movie status.',
   'Trop de tentatives. Réessaie dans quelques minutes.': 'Too many attempts. Try again in a few minutes.',
+  'Trop de tentatives. Réessaie dans une heure.': 'Too many attempts. Try again in an hour.',
   'Tu as déjà joué au quiz du jour. Reviens demain !': 'You’ve already played today’s quiz. Come back tomorrow!',
   'Tu as déjà relevé ce défi.': 'You’ve already taken this challenge.',
   'Tu fais déjà partie de 30 groupes.': 'You’re already in 30 groups.',

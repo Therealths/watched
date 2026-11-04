@@ -197,10 +197,10 @@ function sessionUser(req) {
 
 // Limite les tentatives (connexion, inscription) par adresse IP.
 const attempts = new Map();
-function rateLimit(key, max, windowMs) {
+function rateLimit(key, max, windowMs, msg = 'Trop de tentatives. Réessaie dans quelques minutes.') {
   const now = Date.now();
   const list = (attempts.get(key) || []).filter(t => now - t < windowMs);
-  if (list.length >= max) throw httpError(429, 'Trop de tentatives. Réessaie dans quelques minutes.');
+  if (list.length >= max) throw httpError(429, msg);
   list.push(now);
   attempts.set(key, list);
 }
@@ -322,6 +322,17 @@ const route = (method, pattern, handler, opts = {}) => routes.push({ method, pat
 function httpError(status, message) { const e = new Error(message); e.status = status; return e; }
 
 const USERNAME_RE = /^[a-z0-9_.-]{3,20}$/;
+// Dit précisément ce qui ne va pas dans un pseudo (déjà mis en minuscules), ou null s'il est bon.
+function usernameProblem(u) {
+  if (!u) return tr('Choisis un pseudo.', 'Choose a username.');
+  if (/\s/.test(u)) return tr('Pas d’espace dans le pseudo (tu peux mettre un point ou un _ à la place).', 'No spaces in the username (use a dot or _ instead).');
+  if (/[\u00C0-\u024F]/.test(u)) return tr('Pas d’accent dans le pseudo (é → e, ç → c…).', 'No accents in the username (é → e, ç → c…).');
+  const bad = [...u].find(c => !/[a-z0-9_.-]/.test(c));
+  if (bad) return tr(`Caractère « ${bad} » non autorisé dans le pseudo : seulement lettres, chiffres, point, tiret ou _.`, `The character “${bad}” isn’t allowed in a username: only letters, digits, dot, dash or _.`);
+  if (u.length < 3) return tr('Le pseudo doit faire au moins 3 caractères.', 'The username must be at least 3 characters.');
+  if (u.length > 20) return tr(`Le pseudo doit faire 20 caractères maximum (il en a ${u.length}).`, `The username must be 20 characters at most (it has ${u.length}).`);
+  return null;
+}
 // Deux membres ne peuvent pas avoir le même nom affiché (sans tenir compte des majuscules, accents et espaces).
 const nameKey = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 function checkNameFree(name, exceptId = 0) {
@@ -339,15 +350,22 @@ function cleanEmail(v, required) {
 }
 
 route('POST', /^\/api\/register$/, async ({ req, res, body }) => {
-  rateLimit('reg:' + clientIp(req), 10, 3600e3);
+  rateLimit('reg:' + clientIp(req), 10, 3600e3, 'Trop de tentatives. Réessaie dans une heure.');
   const username = String(body.username || '').trim().toLowerCase();
   const name = String(body.name || '').trim().slice(0, 40) || username;
   const password = String(body.password || '');
-  if (!USERNAME_RE.test(username)) throw httpError(400, 'Pseudo : 3 à 20 caractères, lettres minuscules, chiffres, point, tiret ou _.');
-  if (password.length < 8) throw httpError(400, 'Le mot de passe doit faire au moins 8 caractères.');
-  const email = cleanEmail(body.email, true);
-  if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) throw httpError(409, 'Ce pseudo est déjà pris.');
-  checkNameFree(name);
+  const email = String(body.email || '').trim().toLowerCase();
+  // Tous les problèmes d'un coup, chacun sous son champ.
+  const fields = {};
+  const userErr = usernameProblem(username);
+  if (userErr) fields.username = userErr;
+  else if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) fields.username = tr('Ce pseudo est déjà pris. Choisis-en un autre.', 'This username is already taken. Pick another one.');
+  if (!userErr || body.name) { try { checkNameFree(name); } catch (e) { fields[body.name ? 'name' : 'username'] ??= errorText(e.message); } }
+  if (!email) fields.email = tr('Indique ton adresse mail.', 'Enter your email address.');
+  else if (email.length > 120 || !EMAIL_RE.test(email)) fields.email = tr('Adresse mail invalide (exemple : prenom@gmail.com).', 'Invalid email address (example: name@gmail.com).');
+  if (!password) fields.password = tr('Choisis un mot de passe.', 'Choose a password.');
+  else if (password.length < 8) fields.password = tr(`Le mot de passe doit faire au moins 8 caractères (il en a ${password.length}).`, `Your password must be at least 8 characters (it has ${password.length}).`);
+  if (Object.keys(fields).length) { const e = httpError(400, Object.values(fields)[0]); e.fields = fields; throw e; }
   const lg = cleanLang(body.lang);
   const { lastInsertRowid } = db.prepare('INSERT INTO users (username, name, pass, email, lang, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     .run(username, name, hashPassword(password), email, lg, Date.now());
@@ -1306,7 +1324,7 @@ const server = http.createServer(async (req, res) => {
     const status = e.status || 500;
     if (status === 500) console.error(e);
     const lg = req.headers['x-lang'] ? cleanLang(req.headers['x-lang']) : 'fr';
-    send(res, status, { error: errorText(status === 500 ? 'Erreur du serveur.' : e.message, lg) });
+    send(res, status, { error: errorText(status === 500 ? 'Erreur du serveur.' : e.message, lg), ...(e.fields && { fields: e.fields }) });
   }
 });
 

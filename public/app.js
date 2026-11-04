@@ -38,7 +38,7 @@ const ICON = {
 
 /* ================= Réseau ================= */
 class ApiError extends Error {
-  constructor(message, status) { super(message); this.status = status; }
+  constructor(message, status, fields) { super(message); this.status = status; this.fields = fields; }
 }
 
 async function request(method, url, body) {
@@ -53,7 +53,7 @@ async function request(method, url, body) {
   let data = null;
   try { data = await r.json(); } catch (e) { /* réponse vide */ }
   if (r.status === 401 && me && !/^\/api\/(login|register|me\/password)/.test(url)) sessionExpired();
-  if (!r.ok) throw new ApiError(data?.error || L(`Erreur ${r.status}`, `Error ${r.status}`), r.status);
+  if (!r.ok) throw new ApiError(data?.error || L(`Erreur ${r.status}`, `Error ${r.status}`), r.status, data?.fields);
   return data;
 }
 const get = url => request('GET', url);
@@ -403,7 +403,7 @@ function stars(n) {
 // Filtres de la recherche avancée (Découvrir). Années en texte ('' = pas de limite), note sur 10 (0 = toutes).
 const ADV_DEFAULT = { kind: 'movie', genres: [], from: '', to: '', dur: '', person: null, rating: 0, lang: '', providers: [], sort: 'popularity.desc' };
 const ui = {
-  authMode: LS.get('w2w.invite') ? 'register' : 'login', authMsg: '',   // invité par un lien : on propose de créer un compte
+  authMode: LS.get('w2w.invite') ? 'register' : 'login', authMsg: '', authFields: {},   // invité par un lien : on propose de créer un compte
   profTab: 'settings',   // Profil : 'settings' (Réglages) ou 'stats' (Statistiques)
   collTab: 'tv', seriesTab: 'watch', filmsTab: 'watchlist', sugTab: 'tv', amisTab: 'feed',
   query: '',
@@ -424,6 +424,9 @@ const ui = {
 
 /* ================= Vues : connexion ================= */
 const EMAIL_WHY = L('Seulement pour retrouver ton pseudo ou ton mot de passe si tu les perds. Personne d’autre ne la voit.', 'Only used to recover your username or password if you lose them. Nobody else can see it.');
+// Problème sur un champ de l'inscription : bordure rouge et message juste dessous.
+const badCls = k => ui.authFields[k] ? ' bad' : '';
+const fieldErr = k => ui.authFields[k] ? `<p class="field-err">${esc(ui.authFields[k])}</p>` : '';
 function viewAuth() {
   const reg = ui.authMode === 'register';
   if (ui.authMode === 'forgot') return viewForgot();
@@ -435,14 +438,14 @@ function viewAuth() {
       ${seg('authMode', ui.authMode, [['login', L('Connexion', 'Sign in')], ['register', L('Créer un compte', 'Create an account')]])}
       <form id="authForm" class="form" novalidate>
         <div class="field"><label for="au-user">${L('Pseudo', 'Username')}</label>
-          <input class="input" id="au-user" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required></div>
+          <input class="input${badCls('username')}" id="au-user" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required>${fieldErr('username')}</div>
         ${reg ? `<div class="field"><label for="au-name">${L('Nom affiché <span class="opt">(ce que tes amis verront)</span>', 'Display name <span class="opt">(what your friends will see)</span>')}</label>
-          <input class="input" id="au-name" name="name" autocomplete="nickname" maxlength="40"></div>
+          <input class="input${badCls('name')}" id="au-name" name="name" autocomplete="nickname" maxlength="40">${fieldErr('name')}</div>
         <div class="field"><label for="au-mail">${L('Adresse mail', 'Email address')}</label>
-          <input class="input" id="au-mail" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" required>
+          <input class="input${badCls('email')}" id="au-mail" name="email" type="email" autocomplete="email" autocapitalize="off" spellcheck="false" maxlength="120" required>${fieldErr('email')}
           <p class="muted small field-help">🔒 ${EMAIL_WHY}</p></div>` : ''}
         <div class="field"><label for="au-pass">${L('Mot de passe', 'Password')}${reg ? L(' <span class="opt">(8 caractères minimum)</span>', ' <span class="opt">(at least 8 characters)</span>') : ''}</label>
-          <input class="input" id="au-pass" name="password" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required></div>
+          <input class="input${badCls('password')}" id="au-pass" name="password" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}" required>${fieldErr('password')}</div>
         ${ui.authMsg ? `<div class="err">${esc(ui.authMsg)}</div>` : ''}
         <button class="btn primary" type="submit">${reg ? L('Créer mon compte', 'Create my account') : L('Me connecter', 'Sign in')}</button>
         ${reg ? '' : `<button type="button" class="linkbtn forgot-link" data-act="forgot">${L('Pseudo ou mot de passe oublié ?', 'Forgot your username or password?')}</button>`}
@@ -488,7 +491,7 @@ async function submitAuth(form) {
   const invite = LS.get('w2w.invite');
   if (reg && invite) body.invite = invite;   // le serveur l'ajoute directement au groupe
   body.lang = LANG;
-  ui.authMsg = '';
+  ui.authMsg = ''; ui.authFields = {};
   try {
     const r = await post(reg ? '/api/register' : '/api/login', body);
     me = r.user;
@@ -508,12 +511,17 @@ async function submitAuth(form) {
     if (location.hash !== target) location.hash = target; else render();
     refreshMe();
   } catch (e) {
-    ui.authMsg = e.message;
-    const keep = { u: form.elements.username.value, n: form.elements.name?.value, m: form.elements.email?.value };
+    // Inscription : chaque problème sous son champ ; ce qui est bon reste rempli (mot de passe compris), le reste est vidé.
+    ui.authFields = e.fields || {};
+    ui.authMsg = e.fields ? '' : e.message;
+    const ids = { username: 'au-user', name: 'au-name', email: 'au-mail', password: 'au-pass' };
+    const keep = Object.fromEntries(Object.keys(ids).map(k => [k, form.elements[k]?.value]));
     render();
-    document.getElementById('au-user').value = keep.u;
-    if (keep.n != null && document.getElementById('au-name')) document.getElementById('au-name').value = keep.n;
-    if (keep.m != null && document.getElementById('au-mail')) document.getElementById('au-mail').value = keep.m;
+    for (const [k, id] of Object.entries(ids)) {
+      const el = document.getElementById(id);
+      if (el && keep[k] != null && !(reg && ui.authFields[k])) el.value = keep[k];
+    }
+    document.querySelector('#authForm .bad')?.focus();
   }
 }
 
@@ -2751,7 +2759,7 @@ const actions = {
     if (name === 'rankTab') { ui.rankTab = v; return rerender(); }
     const from = Number(main.querySelector(`[data-tabs="${name}"]`)?.style.getPropertyValue('--i'));
     ui[name] = v;
-    if (name === 'authMode') ui.authMsg = '';
+    if (name === 'authMode') { ui.authMsg = ''; ui.authFields = {}; }
     render(); scrollTo(0, 0);
     slideTabs(name, from);
   },
@@ -3305,6 +3313,11 @@ document.addEventListener('click', ev => {
 let searchTimer;
 document.addEventListener('input', ev => {
   const t = ev.target;
+  // On corrige un champ signalé : son message disparaît.
+  if (t.classList.contains('bad') && t.closest('#authForm')) {
+    t.classList.remove('bad'); t.nextElementSibling?.classList.contains('field-err') && t.nextElementSibling.remove();
+    delete ui.authFields[t.name];
+  }
   if (t.id === 'q') {
     ui.query = t.value;
     clearTimeout(searchTimer);
