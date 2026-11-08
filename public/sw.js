@@ -1,5 +1,5 @@
 // Garde l'appli disponible hors connexion. Change VERSION à chaque mise à jour des fichiers.
-const VERSION = 'what2watch-v47';
+const VERSION = 'what2watch-v48';
 const SHELL = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png',

@@ -1037,10 +1037,115 @@ function hero(backdrop, posterPath, title, meta) {
   return `<div class="hero">
     <div class="hero-bg">${backdrop ? `<img src="${IMG}w780${esc(backdrop)}" alt="" onerror="this.remove()">` : ''}</div>
     ${backBtn()}
-    <div class="hero-inner pad">${poster(posterPath, title)}
+    <div class="hero-inner pad">${posterPath
+      ? `<button type="button" class="poster-btn" data-act="poster-zoom" data-path="${esc(posterPath)}" aria-label="${L('Agrandir l’affiche', 'Enlarge the poster')}">${poster(posterPath, title)}</button>`
+      : poster(posterPath, title)}
       <div class="min0"><h1>${esc(title)}</h1><div class="hero-meta">${meta}</div></div>
     </div>
   </div>`;
+}
+
+// Affiche en plein écran (appui sur l'affiche d'une fiche) : pincer, molette ou deux appuis pour zoomer,
+// glisser pour se déplacer, un appui pour fermer.
+function zoomPoster(path, from) {
+  const box = document.createElement('div');
+  box.className = 'lightbox';
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', L('Affiche', 'Poster'));
+  box.innerHTML = `<img src="${IMG}w342${esc(path)}" alt="" draggable="false">
+    <button type="button" class="sheet-x lb-x" aria-label="${L('Fermer', 'Close')}">${ICON.close}</button>`;
+  const img = box.querySelector('img');
+  // D'abord l'image déjà chargée par la fiche, puis la version grande, puis l'originale (nette même zoomée).
+  for (const size of ['w780', 'original']) {
+    const hi = new Image(); hi.onload = () => { if (size === 'original' || !img.src.includes('/original')) img.src = hi.src; }; hi.src = `${IMG}${size}${path}`;
+  }
+  document.body.append(box);
+  document.documentElement.classList.add('lb-open');
+
+  let s = 1, tx = 0, ty = 0;
+  const apply = () => { img.style.transform = `translate(${tx}px, ${ty}px) scale(${s})`; };
+  const clamp = () => {
+    const mx = Math.max(0, (img.offsetWidth * s - innerWidth) / 2), my = Math.max(0, (img.offsetHeight * s - innerHeight) / 2);
+    tx = Math.min(mx, Math.max(-mx, tx)); ty = Math.min(my, Math.max(-my, ty));
+  };
+  // Zoome vers `next` en gardant sous le doigt le point (x, y) de l'écran.
+  const zoomAt = (next, x, y) => {
+    next = Math.min(5, Math.max(1, next));
+    const qx = x - innerWidth / 2, qy = y - innerHeight / 2;
+    tx = qx - next * (qx - tx) / s; ty = qy - next * (qy - ty) / s; s = next;
+    if (s === 1) tx = ty = 0;
+    clamp(); apply();
+  };
+
+  // Ouverture : l'affiche grandit depuis sa place dans la fiche.
+  const fromRect = () => {
+    const a = from?.getBoundingClientRect(), b = img.getBoundingClientRect();
+    if (!a || !b.width) return null;
+    return `translate(${a.left + a.width / 2 - (b.left + b.width / 2)}px, ${a.top + a.height / 2 - (b.top + b.height / 2)}px) scale(${a.width / b.width})`;
+  };
+  const calmNow = calmMotion();
+  const start = !calmNow && fromRect();
+  if (start) img.animate([{ transform: start }, { transform: 'none' }], { duration: 280, easing: 'cubic-bezier(.2,.8,.2,1)' });
+  box.animate([{ backgroundColor: 'rgba(0,0,0,0)' }, { backgroundColor: 'rgba(0,0,0,.92)' }], { duration: calmNow ? 0 : 220, fill: 'none' });
+
+  let closing = false;
+  const close = () => {
+    if (closing) return; closing = true;
+    removeEventListener('keydown', onKey); removeEventListener('hashchange', close);
+    document.documentElement.classList.remove('lb-open');
+    const end = s === 1 && !calmNow && fromRect();
+    const anims = [box.animate([{ opacity: 1 }, { opacity: 0 }], { duration: calmNow ? 0 : 220, fill: 'forwards' })];
+    if (end) anims.push(img.animate([{ transform: 'none' }, { transform: end }], { duration: 240, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' }));
+    Promise.all(anims.map(a => a.finished)).finally(() => box.remove());
+  };
+  const onKey = ev => { if (ev.key === 'Escape') close(); };
+  addEventListener('keydown', onKey);
+  addEventListener('hashchange', close);
+  box.querySelector('.lb-x').addEventListener('click', ev => { ev.stopPropagation(); close(); });
+  box.querySelector('.lb-x').focus({ preventScroll: true });
+
+  // Doigts posés : un pour déplacer, deux pour pincer.
+  const pts = new Map();
+  let pinch = null, moved = false, lastTap = 0, tapTimer;
+  box.addEventListener('pointerdown', ev => {
+    if (ev.target.closest('.lb-x')) return;
+    box.setPointerCapture(ev.pointerId);
+    pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    moved = pts.size > 1;
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s };
+    }
+  });
+  box.addEventListener('pointermove', ev => {
+    const p = pts.get(ev.pointerId);
+    if (!p) return;
+    const dx = ev.clientX - p.x, dy = ev.clientY - p.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+    p.x = ev.clientX; p.y = ev.clientY;
+    if (pts.size === 2 && pinch) {
+      const [a, b] = [...pts.values()];
+      zoomAt(pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, (a.x + b.x) / 2, (a.y + b.y) / 2);
+    } else if (pts.size === 1 && s > 1) { tx += dx; ty += dy; clamp(); apply(); }
+  });
+  const up = ev => {
+    if (!pts.delete(ev.pointerId)) return;
+    if (pts.size < 2) pinch = null;
+    if (pts.size || moved || ev.type === 'pointercancel') return;
+    // Deux appuis rapprochés : zoom (ou retour à la taille normale) ; un seul : on ferme.
+    const now = Date.now();
+    if (now - lastTap < 300) {
+      clearTimeout(tapTimer); lastTap = 0;
+      img.style.transition = 'transform .22s ease';
+      zoomAt(s > 1 ? 1 : 2.5, ev.clientX, ev.clientY);
+      setTimeout(() => { img.style.transition = ''; }, 240);
+    } else {
+      lastTap = now;
+      tapTimer = setTimeout(close, 300);
+    }
+  };
+  box.addEventListener('pointerup', up);
+  box.addEventListener('pointercancel', up);
+  box.addEventListener('wheel', ev => { ev.preventDefault(); zoomAt(s * Math.exp(-ev.deltaY / 300), ev.clientX, ev.clientY); }, { passive: false });
 }
 
 function overviewBlock(key, text) {
@@ -1849,7 +1954,7 @@ function viewQuiz() {
   return `<div class="pad quiz">${top}
     <div class="quiz-timer ${answered || Q.picked !== null ? 'stop' : ''}"><i style="--from:${(left / Q.limit).toFixed(3)};animation-duration:${left}ms"></i></div>
     <div class="quiz-body ${enter ? 'enter' : ''}">
-      ${Q.q.img ? `<div class="quiz-img ${Q.q.imgKind} ${answered || Q.picked !== null ? 'revealed' : ''}" style="--from:${(left / Q.limit).toFixed(3)};--d:${left}ms"><img src="${IMG}${Q.q.imgKind === 'backdrop' ? 'w780' : 'w342'}${esc(Q.q.img)}" alt=""></div>` : ''}
+      ${Q.q.img ? `<div class="quiz-img ${Q.q.imgKind} ${answered || Q.picked !== null ? 'revealed' : ''}" style="--from:${(left / Q.limit).toFixed(3)};--d:${left}ms"><img src="${IMG}${Q.q.imgKind === 'backdrop' ? 'w780' : Q.q.imgKind === 'reveal' ? 'w500' : 'w342'}${esc(Q.q.img)}" alt=""></div>` : ''}
       <h2 class="quiz-q">${esc(Q.q.t)}</h2>
       ${Q.q.x ? `<blockquote class="quiz-x">${esc(Q.q.x)}</blockquote>` : ''}
       <div class="quiz-choices ${withImg ? 'faces' : Q.q.c.length === 2 ? 'tf' : ''}">${Q.q.c.map((c, i) => {
@@ -2753,6 +2858,7 @@ async function setLang(v) {
 
 /* ================= Actions ================= */
 const actions = {
+  ['poster-zoom'](d, el) { zoomPoster(d.path, el.querySelector('.poster')); },
   seg({ name, v }, el) {
     if (name === 'theme') return switchTheme(v, el);
     if (name === 'lang') return setLang(v);

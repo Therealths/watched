@@ -251,6 +251,14 @@ h2 small { font-weight: 600; letter-spacing: 0; text-transform: none; font-size:
 .hero-bg::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to bottom, transparent 20%, var(--bg) 96%); }
 .hero-inner { position: relative; display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 16px; align-items: end; padding-block: 64px 4px; }
 .hero-inner .poster { box-shadow: 0 8px 24px rgba(0,0,0,.35); }
+.poster-btn { display: block; padding: 0; border: 0; background: none; cursor: zoom-in; border-radius: inherit; }
+.poster-btn .poster { transition: transform .15s ease; }
+.poster-btn:active .poster { transform: scale(.97); }
+/* Affiche en plein écran */
+.lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.92); display: grid; place-items: center; touch-action: none; overscroll-behavior: contain; }
+.lightbox img { width: min(92vw, calc(86dvh * 2 / 3)); aspect-ratio: 2 / 3; object-fit: contain; border-radius: 10px; user-select: none; -webkit-user-select: none; will-change: transform; }
+.lb-x { position: absolute; top: calc(env(safe-area-inset-top) + 14px); right: 14px; background: rgba(255,255,255,.16); color: #fff; }
+html.lb-open, html.lb-open body { overflow: hidden; }
 .hero h1 { font-size: 26px; text-wrap: balance; }
 .hero-meta { font-size: 13.5px; color: var(--muted); margin-top: 6px; }
 .backbtn {
@@ -978,9 +986,10 @@ body.focus-mode #app { padding-bottom: 0; }
 .quiz-img img { border-radius: 14px; box-shadow: 0 8px 24px rgb(0 0 0 / .25); }
 .quiz-img.backdrop img { width: 100%; aspect-ratio: 16 / 9; max-height: 26vh; object-fit: cover; }
 .quiz-img.profile img { height: min(198px, 23vh); aspect-ratio: 2 / 3; object-fit: cover; }
-.quiz-img.reveal img { height: min(230px, 27vh); aspect-ratio: 2 / 3; object-fit: cover; clip-path: inset(0 round 14px); animation: quiz-unblur var(--d) linear forwards; }
+/* Affiche floue : grande, et nette bien avant la fin du temps (le flou fond surtout au début). */
+.quiz-img.reveal img { height: min(360px, 42vh); aspect-ratio: 2 / 3; object-fit: cover; clip-path: inset(0 round 14px); animation: quiz-unblur var(--d) cubic-bezier(.2, .75, .35, 1) forwards; }
 .quiz-img.reveal.revealed img { animation: none; filter: none; transition: filter .4s; }
-@keyframes quiz-unblur { from { filter: blur(calc(26px * var(--from))); } to { filter: blur(0); } }
+@keyframes quiz-unblur { from { filter: blur(calc(16px * var(--from))); } 70% { filter: blur(calc(2px * var(--from))); } to { filter: blur(0); } }
 .quiz-x { margin: -2px 0 14px; padding: 12px 14px; border-left: 3px solid var(--accent, #FFB547); border-radius: 0 12px 12px 0;
   background: var(--surface); font-size: 15px; line-height: 1.45; color: var(--fg); font-style: italic; }
 .quiz-choices.tf { display: grid; grid-template-columns: 1fr 1fr; }
