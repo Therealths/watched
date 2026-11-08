@@ -257,7 +257,9 @@ h2 small { font-weight: 600; letter-spacing: 0; text-transform: none; font-size:
 /* Affiche en plein écran */
 .lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.92); display: grid; place-items: center; touch-action: none; overscroll-behavior: contain; }
 .lightbox img { width: min(92vw, calc(86dvh * 2 / 3)); aspect-ratio: 2 / 3; object-fit: contain; border-radius: 10px; user-select: none; -webkit-user-select: none; will-change: transform; }
-.lb-x { position: absolute; top: calc(env(safe-area-inset-top) + 14px); right: 14px; background: rgba(255,255,255,.16); color: #fff; }
+.lb-bar { position: absolute; top: calc(env(safe-area-inset-top) + 14px); right: 14px; display: flex; gap: 10px; }
+.lb-bar .sheet-x { width: 40px; height: 40px; background: rgba(255,255,255,.16); color: #fff; }
+.lb-bar .sheet-x.busy { opacity: .5; }
 html.lb-open, html.lb-open body { overflow: hidden; }
 .hero h1 { font-size: 26px; text-wrap: balance; }
 .hero-meta { font-size: 13.5px; color: var(--muted); margin-top: 6px; }
@@ -1068,3 +1070,4 @@ body.focus-mode #app { padding-bottom: 0; }
 /* Choix de la langue sous la carte de connexion. */
 .lang-pick { display: flex; justify-content: center; }
 .lang-pick .seg { min-width: 220px; }
+html.lb-open #toast { z-index: 110; }

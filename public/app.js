@@ -34,6 +34,7 @@ const ICON = {
   filter: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.5"/><circle cx="10" cy="17" r="2.5"/></svg>',
   gear: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
   close: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>',
+  download: '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14"/></svg>',
 };
 
 /* ================= Réseau ================= */
@@ -1038,21 +1039,49 @@ function hero(backdrop, posterPath, title, meta) {
     <div class="hero-bg">${backdrop ? `<img src="${IMG}w780${esc(backdrop)}" alt="" onerror="this.remove()">` : ''}</div>
     ${backBtn()}
     <div class="hero-inner pad">${posterPath
-      ? `<button type="button" class="poster-btn" data-act="poster-zoom" data-path="${esc(posterPath)}" aria-label="${L('Agrandir l’affiche', 'Enlarge the poster')}">${poster(posterPath, title)}</button>`
+      ? `<button type="button" class="poster-btn" data-act="poster-zoom" data-path="${esc(posterPath)}" data-title="${esc(title)}" aria-label="${L('Agrandir l’affiche', 'Enlarge the poster')}">${poster(posterPath, title)}</button>`
       : poster(posterPath, title)}
       <div class="min0"><h1>${esc(title)}</h1><div class="hero-meta">${meta}</div></div>
     </div>
   </div>`;
 }
 
+// Enregistre l'affiche en pleine qualité. Sur iPhone / iPad, le menu de partage propose « Enregistrer l'image » (Photos) ;
+// ailleurs, le fichier part dans les téléchargements.
+async function downloadPoster(path, title, btn) {
+  if (btn.disabled) return;
+  btn.disabled = true; btn.classList.add('busy');
+  try {
+    // Sans le cache : l'affiche déjà affichée y est gardée sans l'autorisation nécessaire pour la lire ici.
+    const r = await fetch(`${IMG}original${path}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error();
+    const blob = await r.blob();
+    const name = `${(title || 'affiche').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '') || 'affiche'}${path.match(/\.\w+$/)?.[0] || '.jpg'}`;
+    const file = new File([blob], name, { type: blob.type || 'image/jpeg' });
+    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (ios && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); } catch (e) { /* partage annulé */ }
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10e3);
+    toast(L('Affiche téléchargée', 'Poster downloaded'));
+  } catch (e) {
+    toast(L('Impossible de télécharger l’affiche. Réessaie.', 'Couldn’t download the poster. Try again.'));
+  } finally { btn.disabled = false; btn.classList.remove('busy'); }
+}
+
 // Affiche en plein écran (appui sur l'affiche d'une fiche) : pincer, molette ou deux appuis pour zoomer,
 // glisser pour se déplacer, un appui pour fermer.
-function zoomPoster(path, from) {
+function zoomPoster(path, from, title) {
   const box = document.createElement('div');
   box.className = 'lightbox';
   box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', L('Affiche', 'Poster'));
   box.innerHTML = `<img src="${IMG}w342${esc(path)}" alt="" draggable="false">
-    <button type="button" class="sheet-x lb-x" aria-label="${L('Fermer', 'Close')}">${ICON.close}</button>`;
+    <div class="lb-bar"><button type="button" class="sheet-x lb-dl" aria-label="${L('Télécharger l’affiche', 'Download the poster')}">${ICON.download}</button>
+      <button type="button" class="sheet-x lb-x" aria-label="${L('Fermer', 'Close')}">${ICON.close}</button></div>`;
   const img = box.querySelector('img');
   // D'abord l'image déjà chargée par la fiche, puis la version grande, puis l'originale (nette même zoomée).
   for (const size of ['w780', 'original']) {
@@ -1102,12 +1131,13 @@ function zoomPoster(path, from) {
   addEventListener('hashchange', close);
   box.querySelector('.lb-x').addEventListener('click', ev => { ev.stopPropagation(); close(); });
   box.querySelector('.lb-x').focus({ preventScroll: true });
+  box.querySelector('.lb-dl').addEventListener('click', ev => { ev.stopPropagation(); downloadPoster(path, title, ev.currentTarget); });
 
   // Doigts posés : un pour déplacer, deux pour pincer.
   const pts = new Map();
   let pinch = null, moved = false, lastTap = 0, tapTimer;
   box.addEventListener('pointerdown', ev => {
-    if (ev.target.closest('.lb-x')) return;
+    if (ev.target.closest('.lb-bar')) return;
     box.setPointerCapture(ev.pointerId);
     pts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
     moved = pts.size > 1;
@@ -2858,7 +2888,7 @@ async function setLang(v) {
 
 /* ================= Actions ================= */
 const actions = {
-  ['poster-zoom'](d, el) { zoomPoster(d.path, el.querySelector('.poster')); },
+  ['poster-zoom'](d, el) { zoomPoster(d.path, el.querySelector('.poster'), d.title); },
   seg({ name, v }, el) {
     if (name === 'theme') return switchTheme(v, el);
     if (name === 'lang') return setLang(v);
