@@ -39,6 +39,8 @@ const ERRORS = {
   'Donne un nom au groupe.': 'Give the group a name.',
   'Écris quelque chose avant d’envoyer.': 'Write something before sending.',
   'Groupe introuvable.': 'Group not found.',
+  'Le groupe Général ne peut pas être modifié.': 'The General group can’t be changed.',
+  'Chacun rejoint le groupe Général lui-même.': 'Everyone joins the General group themselves.',
   'Il faut un titre et un message.': 'A title and a message are required.',
   'Image invalide.': 'Invalid image.',
   'Image trop lourde.': 'Image is too large.',

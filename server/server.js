@@ -372,6 +372,8 @@ route('POST', /^\/api\/register$/, async ({ req, res, body }) => {
   // Inscription depuis un lien d'invitation : on entre directement dans le groupe.
   const g = body.invite && groupByInvite(String(body.invite));
   if (g) joinGroup(g.id, Number(lastInsertRowid));
+  const gen = generalGroup();
+  if (gen) joinGroup(gen.id, Number(lastInsertRowid));
   createSession(res, req, Number(lastInsertRowid));
   return { user: { id: Number(lastInsertRowid), username, name, email, lang: lg } };
 }, { auth: false });
@@ -594,6 +596,9 @@ const newInvite = () => crypto.randomBytes(9).toString('base64url');
 const groupByInvite = code => db.prepare('SELECT * FROM groups WHERE invite = ?').get(code);
 const isMember = (gid, uid) => !!db.prepare('SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?').get(gid, uid);
 const joinGroup = (gid, uid) => db.prepare('INSERT OR IGNORE INTO group_members (group_id, user_id, joined_at) VALUES (?, ?, ?)').run(gid, uid, Date.now());
+// Le groupe « Général » : tout le monde y est à l'inscription, chacun peut le quitter et y revenir. Personne ne le règle.
+const generalGroup = () => db.prepare('SELECT * FROM groups WHERE general = 1').get();
+const groupName = g => (g.general ? tr('Général', 'General') : g.name);
 function myGroup(gid, user) {
   const g = db.prepare('SELECT * FROM groups WHERE id = ?').get(gid);
   if (!g || !isMember(gid, user.id)) throw httpError(404, 'Groupe introuvable.');
@@ -610,15 +615,21 @@ function groupFields(body, uid, exceptId = 0) {
 }
 function groupsOf(uid) {
   const groups = db.prepare(`SELECT g.* FROM groups g JOIN group_members m ON m.group_id = g.id WHERE m.user_id = ?
-    ORDER BY g.created_at`).all(uid);
+    ORDER BY g.general DESC, g.created_at`).all(uid);
   const members = db.prepare('SELECT user_id FROM group_members WHERE group_id = ? ORDER BY joined_at');
-  const out = groups.map(g => ({ id: g.id, name: g.name, emoji: g.emoji, invite: g.invite, createdBy: g.created_by,
-    members: members.all(g.id).map(r => r.user_id) }));
-  return { groups: out, users: usersById(out.flatMap(g => g.members)) };
+  const out = groups.map(g => ({ id: g.id, name: groupName(g), emoji: g.emoji, invite: g.invite, createdBy: g.created_by,
+    general: !!g.general, members: members.all(g.id).map(r => r.user_id) }));
+  // Le groupe Général reste visible pour ceux qui l'ont quitté, pour pouvoir y revenir.
+  const gen = generalGroup();
+  const general = gen && !out.some(g => g.id === gen.id)
+    ? { id: gen.id, name: groupName(gen), emoji: gen.emoji, count: db.prepare('SELECT COUNT(*) n FROM group_members WHERE group_id = ?').get(gen.id).n }
+    : null;
+  return { groups: out, general, users: usersById(out.flatMap(g => g.members)) };
 }
 // Quand le créateur part, le membre le plus ancien prend sa place ; un groupe vide disparaît.
 function leaveGroup(gid, uid) {
   db.prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?').run(gid, uid);
+  if (generalGroup()?.id === gid) return;   // le Général ne disparaît jamais et n'a pas de créateur
   const next = db.prepare('SELECT user_id FROM group_members WHERE group_id = ? ORDER BY joined_at LIMIT 1').get(gid);
   if (!next) db.prepare('DELETE FROM groups WHERE id = ?').run(gid);
   else db.prepare('UPDATE groups SET created_by = ? WHERE id = ? AND (created_by IS NULL OR created_by = ?)').run(next.user_id, gid, uid);
@@ -635,9 +646,16 @@ route('POST', /^\/api\/groups$/, async ({ user, body }) => {
 });
 route('POST', /^\/api\/groups\/(\d+)$/, async ({ user, match, body }) => {
   const g = myGroup(Number(match[1]), user);
+  if (g.general) throw httpError(403, 'Le groupe Général ne peut pas être modifié.');
   const { name, emoji } = groupFields(body, user.id, g.id);
   db.prepare('UPDATE groups SET name = ?, emoji = ? WHERE id = ?').run(name, emoji, g.id);
   return groupsOf(user.id);
+});
+route('POST', /^\/api\/groups\/general\/join$/, async ({ user }) => {
+  const gen = generalGroup();
+  if (!gen) throw httpError(404, 'Groupe introuvable.');
+  joinGroup(gen.id, user.id);
+  return { id: gen.id, ...groupsOf(user.id) };
 });
 route('POST', /^\/api\/groups\/(\d+)\/leave$/, async ({ user, match }) => {
   leaveGroup(myGroup(Number(match[1]), user).id, user.id);
@@ -646,6 +664,7 @@ route('POST', /^\/api\/groups\/(\d+)\/leave$/, async ({ user, match }) => {
 // N'importe quel membre peut ajouter quelqu'un de l'appli dans un groupe dont il fait partie.
 route('POST', /^\/api\/groups\/(\d+)\/add$/, async ({ user, match, body }) => {
   const g = myGroup(Number(match[1]), user);
+  if (g.general) throw httpError(403, 'Chacun rejoint le groupe Général lui-même.');
   const uid = Number(body.userId);
   if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(uid)) throw httpError(404, 'Utilisateur introuvable.');
   joinGroup(g.id, uid);
@@ -671,7 +690,7 @@ route('GET', /^\/api\/invite\/([\w-]{6,40})$/, async ({ req, match }) => {
   const g = groupByInvite(match[1]);
   if (!g) throw httpError(404, 'Ce lien d’invitation ne marche plus. Demande-en un nouveau.');
   const n = db.prepare('SELECT COUNT(*) n FROM group_members WHERE group_id = ?').get(g.id).n;
-  return { group: { id: g.id, name: g.name, emoji: g.emoji, count: n } };
+  return { group: { id: g.id, name: groupName(g), emoji: g.emoji, count: n } };
 }, { auth: false });
 route('POST', /^\/api\/invite\/([\w-]{6,40})\/join$/, async ({ user, match }) => {
   const g = groupByInvite(match[1]);

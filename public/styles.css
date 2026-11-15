@@ -781,6 +781,7 @@ label.btn { cursor: pointer; }
 .gcard-actions { display: flex; gap: 8px; margin-top: 10px; }
 .gcard-actions .btn { justify-content: center; }
 .gcard-actions .btn.grow { flex: 1; }
+.gcard-out { border-style: dashed; }
 .btn.iconbtn { width: 40px; padding: 0; justify-content: center; flex: none; }
 .btn.iconbtn .icon { width: 20px; height: 20px; }
 .av.more { background: var(--surface-2); color: var(--muted); font-size: 11px; }

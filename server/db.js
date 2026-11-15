@@ -258,6 +258,15 @@ function openDb(dir) {
     }
     db.prepare("INSERT INTO app_meta (k, v) VALUES ('groups_init', '1')").run();
   }
+  // Groupe « Général » : tout le monde y entre à l'inscription ; on peut le quitter et y revenir quand on veut.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('groups') WHERE name = 'general'").get()) db.exec('ALTER TABLE groups ADD COLUMN general INTEGER NOT NULL DEFAULT 0');
+  if (!db.prepare("SELECT 1 FROM app_meta WHERE k = 'general_init'").get()) {
+    const now = Date.now();
+    const { lastInsertRowid: gid } = db.prepare('INSERT INTO groups (name, emoji, invite, created_by, created_at, general) VALUES (?, ?, ?, NULL, ?, 1)')
+      .run('Général', '🌍', require('node:crypto').randomBytes(9).toString('base64url'), now);
+    db.prepare('INSERT INTO group_members (group_id, user_id, joined_at) SELECT ?, id, ? FROM users').run(gid, now);
+    db.prepare("INSERT INTO app_meta (k, v) VALUES ('general_init', '1')").run();
+  }
   return db;
 }
 

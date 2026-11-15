@@ -1488,7 +1488,8 @@ function viewAmis() {
   else if (r.error) body = errorBlock(r.error);
   else if (!groups.length) body = `<div class="empty"><b>${L('Aucun groupe pour l’instant', 'No groups yet')}</b>
       <p>${L('Crée un groupe pour tes potes, ta famille ou tes collègues, puis invite-les avec un lien. Tu verras ici ce qu’ils regardent.', 'Create a group for your friends, family or coworkers, then invite them with a link. You’ll see what they’re watching here.')}</p>
-      <button class="btn primary" data-act="group-new">${ICON.plus} ${L('Créer un groupe', 'Create a group')}</button></div>`;
+      <button class="btn primary" data-act="group-new">${ICON.plus} ${L('Créer un groupe', 'Create a group')}</button></div>
+      ${r.data.general ? `<div class="gcards">${generalCard(r.data.general)}</div>` : ''}`;
   else body = `${tabs('amisTab', ui.amisTab, [['feed', L('Activité', 'Activity')], ['friends', L('Membres', 'Members')], ['groups', L('Groupes', 'Groups')], ['games', `${L('Jeux', 'Games')}${badges.quiz || badges.duels ? `<i class="tabmark" aria-label="${L('à jouer', 'to play')}"></i>` : ''}`]])}
     ${ui.amisTab === 'friends' ? membersHTML(r.data, cur) : ui.amisTab === 'groups' ? groupsTabHTML(r.data) : ui.amisTab === 'games' ? gamesHTML(cur) : feedHTML(cur)}`;
   return `<div class="pad">
@@ -1501,24 +1502,32 @@ function viewAmis() {
   </div>`;
 }
 // Onglet Groupes : tous mes groupes en cartes, avec de quoi inviter et les régler.
-function groupsTabHTML({ groups, users }) {
+function groupsTabHTML({ groups, general, users }) {
   return `<button class="btn primary wide gap-top" data-act="group-new">${ICON.plus} ${L('Créer un groupe', 'Create a group')}</button>
-    <div class="gcards">${groups.map(g => {
+    <div class="gcards">${general ? generalCard(general) : ''}${groups.map(g => {
       const others = g.members.filter(id => id !== me.id && users[id]);
-      const boss = g.createdBy === me.id ? L('toi', 'you') : users[g.createdBy]?.name;
+      const boss = g.general ? '' : g.createdBy === me.id ? L('toi', 'you') : users[g.createdBy]?.name;
       return `<div class="gcard">
         <button class="gcard-main" data-act="group-open" data-id="${g.id}">
           <span class="gemoji">${esc(g.emoji)}</span>
-          <span class="min0"><b>${esc(g.name)}</b><span class="muted small">${plural(g.members.length, L('membre', 'member'), L('membres', 'members'))}${boss ? ` · ${L('créé par', 'created by')} ${esc(boss)}` : ''}</span></span>
+          <span class="min0"><b>${esc(g.name)}</b><span class="muted small">${plural(g.members.length, L('membre', 'member'), L('membres', 'members'))}${g.general ? ` · ${L('ouvert à tous', 'open to everyone')}` : boss ? ` · ${L('créé par', 'created by')} ${esc(boss)}` : ''}</span></span>
           ${others.length ? `<span class="avs">${others.slice(0, 4).map(id => avatar(users[id], 'sm')).join('')}${others.length > 4 ? `<span class="av sm more">+${others.length - 4}</span>` : ''}</span>` : ''}
         </button>
         <div class="gcard-actions">
           <button class="btn small grow" data-act="invite" data-id="${g.id}">${ICON.send} ${L('Inviter', 'Invite')}</button>
           <button class="btn small danger" data-act="grp-leave" data-id="${g.id}">${L('Quitter', 'Leave')}</button>
-          <button class="btn small iconbtn" data-act="group-edit" data-id="${g.id}" aria-label="${L('Réglages de', 'Settings for')} ${esc(g.name)}">${ICON.gear}</button>
+          ${g.general ? '' : `<button class="btn small iconbtn" data-act="group-edit" data-id="${g.id}" aria-label="${L('Réglages de', 'Settings for')} ${esc(g.name)}">${ICON.gear}</button>`}
         </div>
       </div>`;
     }).join('')}</div>`;
+}
+// Le groupe Général, quand on l'a quitté : toujours là pour y revenir.
+function generalCard(g) {
+  return `<div class="gcard gcard-out">
+    <div class="gcard-main"><span class="gemoji">${esc(g.emoji)}</span>
+      <span class="min0"><b>${esc(g.name)}</b><span class="muted small">${plural(g.count, L('membre', 'member'), L('membres', 'members'))} · ${L('ouvert à tous', 'open to everyone')}</span></span></div>
+    <div class="gcard-actions"><button class="btn small primary grow" data-act="grp-join-general">${ICON.plus} ${L('Rejoindre', 'Join')}</button></div>
+  </div>`;
 }
 function setGroup(id) { ui.group = id; LS.set('w2w.group', id); }
 
@@ -1540,7 +1549,7 @@ function membersHTML({ groups, users }, cur) {
   return `<div class="ghead">
       <span class="gemoji">${esc(cur.emoji)}</span>
       <div class="min0"><b>${esc(cur.name)}</b><div class="muted small">${plural(cur.members.length, L('membre', 'member'), L('membres', 'members'))}</div></div>
-      <button class="btn small iconbtn" data-act="group-edit" data-id="${cur.id}" aria-label="${L('Réglages du groupe', 'Group settings')}">${ICON.gear}</button>
+      ${cur.general ? '' : `<button class="btn small iconbtn" data-act="group-edit" data-id="${cur.id}" aria-label="${L('Réglages du groupe', 'Group settings')}">${ICON.gear}</button>`}
     </div>
     <button class="btn primary wide" data-act="invite" data-id="${cur.id}">${ICON.send} ${L('Inviter dans', 'Invite to')} ${esc(cur.name)}</button>
     <div class="people gap-top">${ids.map(id => {
@@ -1550,9 +1559,10 @@ function membersHTML({ groups, users }, cur) {
         + (boss && id !== me.id ? `<button class="btn small danger ${armed ? 'armed' : ''}" data-act="group-kick" data-g="${cur.id}" data-u="${id}">${armed ? L('Sûr ?', 'Sure?') : L('Retirer', 'Remove')}</button>` : '');
       return personRow(id === me.id ? { ...u, name: u.name + L(' (toi)', ' (you)') } : u, extra, `#/user/${id}`);
     }).join('')}</div>
-    <h2>${L('Ajouter quelqu’un de l’appli', 'Add someone from the app')}</h2>
+    ${cur.general ? `<p class="muted small gap-top">${L('Tout le monde entre dans ce groupe en s’inscrivant. Ceux qui l’ont quitté peuvent y revenir depuis l’onglet Groupes.', 'Everyone joins this group when they sign up. Those who left can come back from the Groups tab.')}</p>`
+    : `<h2>${L('Ajouter quelqu’un de l’appli', 'Add someone from the app')}</h2>
     <label class="searchbox">${ICON.search}<input id="memberQ" type="search" autocomplete="off" placeholder="${L('Son pseudo ou son nom', 'Their username or name')}" aria-label="${L('Chercher quelqu’un sur l’appli', 'Search for someone on the app')}"></label>
-    <div id="memberRes" class="people"></div>`;
+    <div id="memberRes" class="people"></div>`}`;
 }
 
 // Recherche de membres de l'appli, affichée sur place pour garder le clavier ouvert.
@@ -3226,13 +3236,23 @@ const actions = {
     const g = (await groupsData()).groups.find(x => x.id === Number(id));
     if (!g) return;
     const last = g.members.length === 1;
-    if (!await ask({ title: L(`Quitter ${g.emoji} ${g.name} ?`, `Leave ${g.emoji} ${g.name}?`), text: last ? L('Tu es le dernier membre : le groupe sera supprimé.', 'You’re the last member: the group will be deleted.') : L('Tu ne verras plus l’activité de ce groupe. Tu pourras revenir avec un lien d’invitation.', 'You won’t see this group’s activity anymore. You can come back with an invite link.'), yes: L('Quitter le groupe', 'Leave group'), no: L('Rester', 'Stay') })) return;
+    if (!await ask({ title: L(`Quitter ${g.emoji} ${g.name} ?`, `Leave ${g.emoji} ${g.name}?`), text: g.general ? L('Tu ne verras plus l’activité de tout le monde. Tu pourras revenir quand tu veux depuis l’onglet Groupes.', 'You won’t see everyone’s activity anymore. You can come back anytime from the Groups tab.') : last ? L('Tu es le dernier membre : le groupe sera supprimé.', 'You’re the last member: the group will be deleted.') : L('Tu ne verras plus l’activité de ce groupe. Tu pourras revenir avec un lien d’invitation.', 'You won’t see this group’s activity anymore. You can come back with an invite link.'), yes: L('Quitter le groupe', 'Leave group'), no: L('Rester', 'Stay') })) return;
     try {
       const res = await post(`/api/groups/${id}/leave`);
       await collapse(main.querySelector(`[data-act="grp-leave"][data-id="${id}"]`)?.closest('.gcard'));
       storeGroups(res); setGroup('all'); rerender(); toast(L(`Tu as quitté ${g.name}`, `You left ${g.name}`));
     }
     catch (e) { fail(e); }
+  },
+  async ['grp-join-general'](d, btn) {
+    btn.disabled = true;
+    try {
+      const res = await post('/api/groups/general/join');
+      storeGroups(res);
+      const g = res.groups.find(x => x.id === res.id);
+      toast(L(`Te revoilà dans ${g.emoji} ${g.name}`, `Welcome back to ${g.emoji} ${g.name}`));
+      rerender();
+    } catch (e) { btn.disabled = false; fail(e); }
   },
   async ['group-kick']({ g, u }) {
     const key = `gkick:${g}:${u}`;
@@ -3264,8 +3284,8 @@ const actions = {
   async ['user-addgroup']({ id, name }) {
     let groups;
     try { groups = (await groupsData()).groups; } catch (e) { return fail(e); }
-    const free = groups.filter(g => !g.members.includes(Number(id)));
-    if (!groups.length) return openGroupForm(null);
+    const free = groups.filter(g => !g.general && !g.members.includes(Number(id)));
+    if (!groups.some(g => !g.general)) return openGroupForm(null);   // le Général ne compte pas : chacun y entre lui-même
     if (!free.length) return toast(L(`${name} est déjà dans tous tes groupes`, `${name} is already in all your groups`));
     openGroupPicker(L(`Ajouter ${name} à…`, `Add ${name} to…`), '', free, 'group-add', `data-u="${id}"`);
   },
