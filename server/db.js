@@ -235,6 +235,8 @@ function openDb(dir) {
       data BLOB NOT NULL
     );
   `);
+  // Photo de profil en grand (pour l'agrandir en plein écran), en plus de la petite.
+  if (!db.prepare("SELECT 1 FROM pragma_table_info('avatar_photos') WHERE name = 'big'").get()) db.exec('ALTER TABLE avatar_photos ADD COLUMN big BLOB');
   // Avatar : null (initiale), 'e<n>' (avatar prédéfini n) ou 'p<horodatage>' (photo, l'horodatage sert de version).
   if (!db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'avatar'").get()) db.exec('ALTER TABLE users ADD COLUMN avatar TEXT');
   // Adresse mail : seulement pour retrouver son pseudo ou son mot de passe (jamais montrée aux autres membres).

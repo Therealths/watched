@@ -257,6 +257,10 @@ h2 small { font-weight: 600; letter-spacing: 0; text-transform: none; font-size:
 /* Affiche en plein écran */
 .lightbox { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.92); display: grid; place-items: center; touch-action: none; overscroll-behavior: contain; }
 .lightbox img { width: min(92vw, calc(86dvh * 2 / 3)); aspect-ratio: 2 / 3; object-fit: contain; border-radius: 10px; user-select: none; -webkit-user-select: none; will-change: transform; }
+.lightbox.sq img { width: min(92vw, 80dvh); aspect-ratio: 1; object-fit: cover; border-radius: 16px; }
+.av-btn { padding: 0; border: 0; background: none; border-radius: 50%; cursor: zoom-in; flex: none; }
+.av-btn .av { transition: transform .15s ease; }
+.av-btn:active .av { transform: scale(.95); }
 .lb-bar { position: absolute; top: calc(env(safe-area-inset-top) + 14px); right: 14px; display: flex; gap: 10px; }
 .lb-bar .sheet-x { width: 40px; height: 40px; background: rgba(255,255,255,.16); color: #fff; }
 .lb-bar .sheet-x.busy { opacity: .5; }

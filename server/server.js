@@ -499,6 +499,7 @@ route('POST', /^\/api\/me\/email$/, async ({ user, body }) => {
 /* ----- avatar ----- */
 const AVATAR_PRESETS = 16;   // doit correspondre à la liste AVATARS de l'appli
 const PHOTO_MAX = 400e3;
+const PHOTO_BIG_MAX = 600e3;
 // Reconnaît le format par les premiers octets plutôt que par ce que l'appli annonce.
 function imageMime(buf) {
   if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image/jpeg';
@@ -515,14 +516,21 @@ route('POST', /^\/api\/me\/avatar$/, async ({ user, body }) => {
     avatar = 'e' + n;
     db.prepare('DELETE FROM avatar_photos WHERE user_id = ?').run(user.id);
   } else if (body.photo != null) {
-    const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(body.photo));
-    if (!m) throw httpError(400, 'Image invalide.');
-    const buf = Buffer.from(m[2], 'base64');
-    if (buf.length > PHOTO_MAX) throw httpError(413, 'Image trop lourde.');
+    const decode = (v, max) => {
+      const m = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(v));
+      if (!m) throw httpError(400, 'Image invalide.');
+      const buf = Buffer.from(m[2], 'base64');
+      if (buf.length > max) throw httpError(413, 'Image trop lourde.');
+      if (!imageMime(buf)) throw httpError(400, 'Image invalide.');
+      return buf;
+    };
+    const buf = decode(body.photo, PHOTO_MAX);
+    // Version grande (facultative) : celle qu'on voit quand on agrandit la photo. Même format que la petite.
+    const big = body.photoBig != null ? decode(body.photoBig, PHOTO_BIG_MAX) : null;
     const mime = imageMime(buf);
-    if (!mime) throw httpError(400, 'Image invalide.');
-    db.prepare('INSERT INTO avatar_photos (user_id, mime, data) VALUES (?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET mime = excluded.mime, data = excluded.data')
-      .run(user.id, mime, buf);
+    if (big && imageMime(big) !== mime) throw httpError(400, 'Image invalide.');
+    db.prepare('INSERT INTO avatar_photos (user_id, mime, data, big) VALUES (?, ?, ?, ?) ON CONFLICT (user_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, big = excluded.big')
+      .run(user.id, mime, buf, big);
     avatar = 'p' + Date.now();
   } else {
     db.prepare('DELETE FROM avatar_photos WHERE user_id = ?').run(user.id);
@@ -532,11 +540,13 @@ route('POST', /^\/api\/me\/avatar$/, async ({ user, body }) => {
 });
 
 // Photo de profil d'un membre (réservée aux membres connectés). L'adresse change à chaque nouvelle photo, d'où le long cache.
-route('GET', /^\/api\/avatar\/(\d+)$/, async ({ res, match }) => {
-  const row = db.prepare('SELECT mime, data FROM avatar_photos WHERE user_id = ?').get(Number(match[1]));
+// ?big=1 : la version grande si elle existe (photos envoyées avant : seulement la petite).
+route('GET', /^\/api\/avatar\/(\d+)$/, async ({ res, url, match }) => {
+  const row = db.prepare('SELECT mime, data, big FROM avatar_photos WHERE user_id = ?').get(Number(match[1]));
   if (!row) throw httpError(404, 'Pas de photo.');
-  res.writeHead(200, { 'content-type': row.mime, 'cache-control': 'private, max-age=31536000, immutable', 'content-length': row.data.length });
-  res.end(Buffer.from(row.data));
+  const data = url.searchParams.get('big') && row.big ? row.big : row.data;
+  res.writeHead(200, { 'content-type': row.mime, 'cache-control': 'private, max-age=31536000, immutable', 'content-length': data.length });
+  res.end(Buffer.from(data));
 });
 
 route('POST', /^\/api\/me\/password$/, async ({ user, body }) => {

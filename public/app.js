@@ -1073,20 +1073,31 @@ async function downloadPoster(path, title, btn) {
   } finally { btn.disabled = false; btn.classList.remove('busy'); }
 }
 
-// Affiche en plein écran (appui sur l'affiche d'une fiche) : pincer, molette ou deux appuis pour zoomer,
-// glisser pour se déplacer, un appui pour fermer.
+// Affiche en plein écran (appui sur l'affiche d'une fiche).
 function zoomPoster(path, from, title) {
+  zoomImage({ srcs: ['w342', 'w780', 'original'].map(size => `${IMG}${size}${path}`), from, label: L('Affiche', 'Poster'),
+    download: { label: L('Télécharger l’affiche', 'Download the poster'), run: btn => downloadPoster(path, title, btn) } });
+}
+// Photo de profil en grand (appui sur la photo dans un profil).
+function zoomAvatar(u, from) {
+  const v = encodeURIComponent((u.avatar || '').slice(1));
+  zoomImage({ srcs: [`/api/avatar/${u.id}?v=${v}`, `/api/avatar/${u.id}?v=${v}&big=1`], from, label: L(`Photo de ${u.name}`, `${u.name}’s photo`), square: true });
+}
+
+// Image en plein écran : pincer, molette ou deux appuis pour zoomer, glisser pour se déplacer, un appui pour fermer.
+// srcs : de la plus petite (déjà affichée) à la plus nette ; chacune remplace la précédente dès qu'elle est chargée.
+function zoomImage({ srcs, from, label, download = null, square = false }) {
   const box = document.createElement('div');
-  box.className = 'lightbox';
-  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', L('Affiche', 'Poster'));
-  box.innerHTML = `<img src="${IMG}w342${esc(path)}" alt="" draggable="false">
-    <div class="lb-bar"><button type="button" class="sheet-x lb-dl" aria-label="${L('Télécharger l’affiche', 'Download the poster')}">${ICON.download}</button>
+  box.className = 'lightbox' + (square ? ' sq' : '');
+  box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', label);
+  box.innerHTML = `<img src="${esc(srcs[0])}" alt="" draggable="false">
+    <div class="lb-bar">${download ? `<button type="button" class="sheet-x lb-dl" aria-label="${esc(download.label)}">${ICON.download}</button>` : ''}
       <button type="button" class="sheet-x lb-x" aria-label="${L('Fermer', 'Close')}">${ICON.close}</button></div>`;
   const img = box.querySelector('img');
-  // D'abord l'image déjà chargée par la fiche, puis la version grande, puis l'originale (nette même zoomée).
-  for (const size of ['w780', 'original']) {
-    const hi = new Image(); hi.onload = () => { if (size === 'original' || !img.src.includes('/original')) img.src = hi.src; }; hi.src = `${IMG}${size}${path}`;
-  }
+  let best = 0;
+  srcs.slice(1).forEach((src, i) => {
+    const hi = new Image(); hi.onload = () => { if (i + 1 > best) { best = i + 1; img.src = hi.src; } }; hi.src = src;
+  });
   document.body.append(box);
   document.documentElement.classList.add('lb-open');
 
@@ -1131,7 +1142,7 @@ function zoomPoster(path, from, title) {
   addEventListener('hashchange', close);
   box.querySelector('.lb-x').addEventListener('click', ev => { ev.stopPropagation(); close(); });
   box.querySelector('.lb-x').focus({ preventScroll: true });
-  box.querySelector('.lb-dl').addEventListener('click', ev => { ev.stopPropagation(); downloadPoster(path, title, ev.currentTarget); });
+  box.querySelector('.lb-dl')?.addEventListener('click', ev => { ev.stopPropagation(); download.run(ev.currentTarget); });
 
   // Doigts posés : un pour déplacer, deux pour pincer.
   const pts = new Map();
@@ -2098,7 +2109,7 @@ function viewUser(id) {
 
   return `${backBtn()}
     <div class="pad uhead">
-      ${avatar(u, 'lg')}
+      ${(u.avatar || '').startsWith('p') ? `<button type="button" class="av-btn" data-act="avatar-zoom" data-id="${u.id}" data-v="${esc(u.avatar)}" data-name="${esc(u.name)}" aria-label="${L('Agrandir la photo', 'Enlarge the photo')}">${avatar(u, 'lg')}</button>` : avatar(u, 'lg')}
       <div class="min0"><h1>${esc(u.name)}</h1><div class="muted">@${esc(u.username)}</div></div>
     </div>
     ${isSelf ? '' : `<div class="pad"><button class="btn small" data-act="user-addgroup" data-id="${u.id}" data-name="${esc(u.name)}">${ICON.plus} ${L('Ajouter à un groupe', 'Add to a group')}</button></div>`}
@@ -2772,11 +2783,17 @@ async function cropPhoto(file) {
   });
   if (!ok) { img.close?.(); return null; }
   // Partie de la photo visible dans le cadre, en pixels de la photo d'origine.
-  const k = cover * zoom, out = document.createElement('canvas');
-  out.width = out.height = 256;
-  out.getContext('2d').drawImage(img, -x / k, -y / k, V / k, V / k, 0, 0, 256, 256);
+  // Deux tailles : la petite pour les listes, la grande (jusqu'à 768 px) pour l'agrandir en plein écran.
+  const k = cover * zoom;
+  const render = size => {
+    const out = document.createElement('canvas');
+    out.width = out.height = size;
+    out.getContext('2d').drawImage(img, -x / k, -y / k, V / k, V / k, 0, 0, size, size);
+    return out.toDataURL('image/jpeg', 0.85);
+  };
+  const photo = render(256), photoBig = render(Math.max(256, Math.min(768, Math.round(V / k))));
   img.close?.();
-  return out.toDataURL('image/jpeg', 0.85);
+  return { photo, photoBig };
 }
 document.addEventListener('change', async ev => {
   if (ev.target.id !== 'avatarFile') return;
@@ -2786,7 +2803,7 @@ document.addEventListener('change', async ev => {
   let photo;
   try { photo = await cropPhoto(file); }
   catch (e) { return toast(L('Impossible de lire cette image. Essaie une photo JPEG ou PNG.', 'Can’t read this image. Try a JPEG or PNG photo.')); }
-  if (photo) await saveAvatar({ photo }, L('Photo de profil enregistrée', 'Profile photo saved'));
+  if (photo) await saveAvatar(photo, L('Photo de profil enregistrée', 'Profile photo saved'));
 });
 
 /* ================= Installation sur l'écran d'accueil ================= */
@@ -2898,6 +2915,7 @@ async function setLang(v) {
 
 /* ================= Actions ================= */
 const actions = {
+  ['avatar-zoom']({ id, v, name }, el) { zoomAvatar({ id, avatar: v, name }, el.querySelector('.av')); },
   ['poster-zoom'](d, el) { zoomPoster(d.path, el.querySelector('.poster'), d.title); },
   seg({ name, v }, el) {
     if (name === 'theme') return switchTheme(v, el);
