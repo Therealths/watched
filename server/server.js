@@ -406,7 +406,18 @@ route('POST', /^\/api\/logout$/, async ({ req, res, user }) => {
   return { ok: true };
 });
 
+// Une visite = l'appli ouverte (ou rouverte) : l'appli demande /api/me à chaque fois.
+// Plusieurs ouvertures à moins d'une demi-heure d'écart comptent pour une seule visite.
+const VISIT_GAP = 30 * 60e3;
+function countVisit(uid) {
+  const now = Date.now(), day = localDay();
+  db.prepare(`INSERT INTO visits (day, user_id, n, last_at) VALUES (?, ?, 1, ?)
+    ON CONFLICT (day, user_id) DO UPDATE SET n = n + (CASE WHEN ? - last_at >= ? THEN 1 ELSE 0 END), last_at = excluded.last_at`)
+    .run(day, uid, now, now, VISIT_GAP);
+}
+
 route('GET', /^\/api\/me$/, async ({ user }) => {
+  countVisit(user.id);
   const seenAt = db.prepare('SELECT at FROM picks_seen WHERE user_id = ?').get(user.id)?.at || 0;
   const recos = db.prepare(`SELECT COUNT(*) n FROM (${PICKS_FOR_SQL}) WHERE at > ?`).get({ u: user.id }, seenAt).n;
   // Annonce en cours, pas encore vue, et envoyée après l'inscription de ce membre.
@@ -452,6 +463,25 @@ route('GET', /^\/api\/admin\/accounts$/, async ({ user }) => {
   const requests = db.prepare('SELECT id, email, at FROM reset_requests WHERE done_at IS NULL ORDER BY at DESC').all()
     .map(r => ({ ...r, users: members.filter(m => m.email === r.email).map(m => m.id) }));
   return { requests, members };
+});
+// Compteur de visites (sans l'administrateur) : les 30 derniers jours, et chaque membre.
+route('GET', /^\/api\/admin\/visits$/, async ({ user }) => {
+  adminOnly(user);
+  const days = [];
+  for (let i = 29; i >= 0; i--) { const t = new Date(); t.setDate(t.getDate() - i); days.push(localDay(t)); }
+  const rows = db.prepare('SELECT day, user_id, n, last_at FROM visits WHERE day >= ? AND user_id != ?').all(days[0], user.id);
+  const sum = list => ({ visits: list.reduce((a, r) => a + r.n, 0), people: new Set(list.map(r => r.user_id)).size });
+  const since = d => rows.filter(r => r.day >= d);
+  const members = db.prepare('SELECT id, username, name, avatar FROM users WHERE id != ? ORDER BY name COLLATE NOCASE').all(user.id).map(m => {
+    const mine = rows.filter(r => r.user_id === m.id);
+    const last = db.prepare('SELECT MAX(last_at) t FROM visits WHERE user_id = ?').get(m.id).t;
+    return { ...m, visits: mine.reduce((a, r) => a + r.n, 0), last: last || null };
+  }).sort((a, b) => (b.last || 0) - (a.last || 0));
+  const start = db.prepare('SELECT MIN(day) d FROM visits').get().d;
+  return {
+    start, today: sum(since(days[29])), week: sum(since(days[23])), month: sum(rows),
+    days: days.map(d => ({ day: d, ...sum(rows.filter(r => r.day === d)) })), members,
+  };
 });
 route('POST', /^\/api\/admin\/reset$/, async ({ user, body }) => {
   adminOnly(user);

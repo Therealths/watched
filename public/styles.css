@@ -338,6 +338,13 @@ html.lb-open, html.lb-open body { overflow: hidden; }
 .stat { background: var(--surface); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .stat b { font: 800 26px/1.1 var(--font-display); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .stat span { font-size: 13px; color: var(--muted); }
+.stats.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.stats.three .stat { background: var(--bg); padding: 12px; }
+.visits { display: flex; flex-direction: column; gap: 10px; }
+.vbars { display: flex; align-items: flex-end; gap: 3px; height: 96px; padding-top: 16px; }
+.vbars i { flex: 1; position: relative; height: max(3px, calc(var(--h) * 100%)); background: var(--accent); border-radius: 3px 3px 1px 1px; opacity: .9; }
+.vbars i span { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); font: 700 10px var(--font-body); color: var(--muted); font-style: normal; padding-bottom: 2px; }
+.vbars-axis { display: flex; justify-content: space-between; margin-top: -4px; }
 .stat.wide { grid-column: 1 / -1; }
 .stat.wide b { color: var(--accent-text); }
 .panel { background: var(--surface); border-radius: var(--radius); padding: 14px; display: flex; flex-direction: column; gap: 10px; }

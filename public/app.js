@@ -2143,6 +2143,7 @@ function adminHTML() {
         <button class="btn small danger" data-act="ann-remove">${ui.confirm === 'ann-remove' ? L('Sûr ? Retirer', 'Sure? Remove') : L('Retirer', 'Remove')}</button></div>
     </div>` : '';
   return `<h2>Admin</h2>
+    ${visitsHTML()}
     ${adminAccountsHTML()}
     <form class="panel" id="annForm">
       <p class="muted small">${L('Ce message s’affiche une seule fois, à la prochaine ouverture de l’appli, chez tous les membres déjà inscrits. Un nouveau message remplace l’ancien.', 'This message shows once, the next time the app opens, for every member already signed up. A new message replaces the old one.')}</p>
@@ -2151,6 +2152,29 @@ function adminHTML() {
       <div class="row"><button class="btn small primary" type="submit">${L('Envoyer à tout le monde', 'Send to everyone')}</button></div>
     </form>
     ${cur}`;
+}
+
+// Compteur de visites (sans toi) : chiffres clés, une barre par jour sur 30 jours, puis chaque membre.
+function visitsHTML() {
+  const r = useData('/api/admin/visits', 60e3);
+  if (!r.data) return r.loading ? spinner() : '';
+  const { start, today, week, month, days, members } = r.data;
+  const tile = (label, v) => `<div class="stat"><b>${v.people}</b><span>${label}<br>${plural(v.visits, L('visite', 'visit'), L('visites', 'visits'))}</span></div>`;
+  const max = Math.max(1, ...days.map(d => d.people));
+  const dayLabel = d => new Date(d + 'T12:00').toLocaleDateString(LOC, { day: 'numeric', month: 'short' });
+  const open = !!ui.expanded.adminVisits;
+  return `<div class="panel visits">
+      <b>${L('📈 Visites', '📈 Visits')}</b>
+      <p class="muted small">${L('Personnes différentes qui ont ouvert l’appli, sans compter toi. Plusieurs ouvertures à moins d’une demi-heure comptent pour une visite.', 'Different people who opened the app, not counting you. Openings less than half an hour apart count as one visit.')}${start ? ' ' + L(`Compteur lancé le ${dayLabel(start).replace(/\.$/, '')}`, `Counting since ${dayLabel(start)}`) + '.' : ''}</p>
+      <div class="stats three">${tile(L('aujourd’hui', 'today'), today)}${tile(L('7 jours', '7 days'), week)}${tile(L('30 jours', '30 days'), month)}</div>
+      <div class="vbars" role="img" aria-label="${L('Personnes par jour sur 30 jours', 'People per day over 30 days')}">${days.map(d =>
+        `<i style="--h:${d.people / max}" title="${esc(dayLabel(d.day))} : ${d.people} · ${d.visits}">${d.people ? `<span>${d.people}</span>` : ''}</i>`).join('')}</div>
+      <div class="vbars-axis muted small"><span>${esc(dayLabel(days[0].day))}</span><span>${L('aujourd’hui', 'today')}</span></div>
+    </div>
+    <button type="button" class="panel duels-toggle acc-toggle ${open ? 'is-open' : ''}" data-act="expand" data-key="adminVisits" aria-expanded="${open}">
+      <span class="min0 grow"><b>${L('🕒 Dernière visite de chacun', '🕒 Everyone’s last visit')}</b></span>${ICON.chevron}</button>
+    ${open ? `<div class="panel acc-list">${members.map(m => `<div class="acc-row">${avatar(m, 'sm')}<span class="min0 grow"><b>${esc(m.name)}</b>
+        <span class="muted small acc-mail">${m.last ? `${timeAgo(m.last)} · ${plural(m.visits, L('visite', 'visit'), L('visites', 'visits'))} ${L('en 30 j', 'in 30 days')}` : L('pas encore venu depuis le début du compteur', 'not seen since the counter started')}</span></span></div>`).join('')}</div>` : ''}`;
 }
 
 // Identifiants oubliés : les demandes reçues, puis tous les membres (avec leur adresse) pour un nouveau mot de passe.

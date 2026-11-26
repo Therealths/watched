@@ -235,6 +235,14 @@ function openDb(dir) {
       data BLOB NOT NULL
     );
   `);
+  // Visites : combien de fois chaque membre ouvre l'appli, par jour (pour le compteur de l'administrateur).
+  db.exec(`CREATE TABLE IF NOT EXISTS visits (
+      day TEXT NOT NULL,                      -- AAAA-MM-JJ (heure du PC)
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      n INTEGER NOT NULL,
+      last_at INTEGER NOT NULL,
+      PRIMARY KEY (day, user_id)
+    )`);
   // Photo de profil en grand (pour l'agrandir en plein écran), en plus de la petite.
   if (!db.prepare("SELECT 1 FROM pragma_table_info('avatar_photos') WHERE name = 'big'").get()) db.exec('ALTER TABLE avatar_photos ADD COLUMN big BLOB');
   // Avatar : null (initiale), 'e<n>' (avatar prédéfini n) ou 'p<horodatage>' (photo, l'horodatage sert de version).
